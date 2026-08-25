@@ -68,7 +68,13 @@ Blogger 댓글 승인제 ON, 알림 메일 `photolark@gmail.com`.
 npm install --prefix tools && npx playwright install chromium   # 최초 1회
 node tools/render-thumbnails.mjs --profile us|kr|us,kr          # 글 대표 썸네일
 node tools/render-figures.mjs                                   # 본문 차트·숫자 카드
+node tools/grab-frames.mjs <영상> --sheet | --at 0:12,1:47      # 편집 영상에서 본문 이미지
+node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형식 변환 + 영상 임베드
 ```
+
+**본문이 밋밋할 때는 편집 영상에서 프레임을 뽑는다.** 이미 자막·그래픽이 들어가 있어
+새로 만들 필요가 없고, 사용자가 촬영하러 나갈 필요도 없다. 채널 영상 소스는 사용자 PC에 있다
+(`autoworker-script`의 `.gitignore`가 `*.png/jpg/mp4`를 전부 막으므로 git에는 없다).
 
 사용법: [`tools/README.md`](tools/README.md)
 

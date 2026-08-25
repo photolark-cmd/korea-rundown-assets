@@ -7,6 +7,7 @@ CSV 한 줄 = PNG 한 장. 도구는 두 개입니다.
 | `render-thumbnails.mjs` | **글 대표 썸네일** (시장별 규격) | `_template.html` |
 | `render-figures.mjs` | **본문용 차트·숫자 카드** | `figure-template.html` |
 | `build-post.mjs` | **초고 → 발행 형식 변환** (`post.html` + `meta.json`) | — |
+| `grab-frames.mjs` | **편집 영상에서 본문 이미지 추출** | — |
 
 디자인은 전부 템플릿에 있고, 스크립트는 값을 채워 넣고 크기를 맞춘 뒤 캡처만 합니다.
 아래 **폰트** 절은 두 도구에 공통으로 적용됩니다.
@@ -266,3 +267,49 @@ node tools/build-post.mjs drafts/2026-08-25-seoul-lunch-prices.md --labels "Food
 - 아직 발행 안 된 글끼리의 **내부 링크는 링크가 아니라 굵은 글씨로 렌더**됩니다.
   URL이 없으니까요. 변환 시 목록으로 알려주니, 발행 후 `post.html`에서 `<a>`로 바꾸세요
 - `meta.json`의 `search_description`은 첫 문단을 자른 것이라 다듬는 편이 낫습니다
+
+---
+
+## 영상에서 본문 이미지 뽑기 (`grab-frames.mjs`)
+
+**편집이 끝난 영상에는 이미 자막과 그래픽이 들어가 있습니다.** 거기서 프레임을 뽑으면
+새로 디자인할 필요 없이 브랜드가 맞는 본문 이미지가 나옵니다. 촬영하러 나갈 일도 없고요.
+
+```bash
+# 1. 어느 장면을 쓸지 고르기 — 컨택트 시트
+node tools/grab-frames.mjs "C:\\영상\\편의점편.mp4" --sheet
+
+# 2. 고른 시점만 추출
+node tools/grab-frames.mjs "C:\\영상\\편의점편.mp4" --at 0:12,1:47,3:05
+```
+
+`figures/`에 저장되고, 커밋·푸시하면 raw.githubusercontent 주소로 본문에 바로 쓸 수 있습니다.
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--sheet` | — | 균등 간격 프레임을 격자로 만들어 시점 고르기용 |
+| `--tiles <n>` | `12` | 시트에 넣을 프레임 수 (3의 배수가 보기 좋음) |
+| `--at <t,...>` | — | 추출할 시점. `0:12` · `1:47.5` · `95` 형식 |
+| `--width <px>` | `1280` | 출력 가로 폭 |
+| `--out <dir>` | `figures` | 저장 위치 |
+| `--ffmpeg <path>` | 자동 탐색 | ffmpeg 경로 |
+
+**ffmpeg가 필요합니다.** PATH에 있으면 그걸 쓰고, 없으면 Playwright 번들을 찾습니다.
+다만 번들 빌드는 기능이 축소돼 있어서 **격자 조립은 ffmpeg가 아니라 Chromium이 합니다** —
+어느 ffmpeg를 쓰든 시트가 나옵니다.
+
+### 영상 임베드
+
+`build-post.mjs`에 `--youtube`를 주면 본문 끝에 임베드가 붙고 `meta.json`에도 기록됩니다.
+
+```bash
+node tools/build-post.mjs drafts/<파일>.md --youtube "https://www.youtube.com/watch?v=..."
+```
+
+형식은 채널 공용 규칙(`autoworker-script`의 `블로그작성.md` 4절)을 따릅니다:
+
+- **반응형 래퍼를 쓰지 않습니다.** Blogger가 그 CSS를 걷어내 영상이 사라집니다
+- **대체 링크를 함께 넣습니다.** 광고차단 확장이 iframe을 막으면 자리가 통째로 비어서요
+- 영상이 실제로 올라온 뒤에 붙이세요. 없는 영상을 임베드하면 나중에 고치는 품이 더 듭니다
+
+특정 장면부터 재생시키려면 임베드 주소 끝에 `?start=107`(초)을 붙이면 됩니다.
