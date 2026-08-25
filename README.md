@@ -18,6 +18,7 @@
 | 가이드 | [`docs/content-guide-kr.md`](docs/content-guide-kr.md) | [`docs/content-guide-us.md`](docs/content-guide-us.md) |
 | 글 템플릿 | [`docs/post-template-kr.md`](docs/post-template-kr.md) | [`docs/post-template-us.md`](docs/post-template-us.md) |
 | 뉴스 대응 | — | [`docs/newsjacking-playbook.md`](docs/newsjacking-playbook.md) |
+| 촬영 목록 | — | [`docs/photo-shot-list.md`](docs/photo-shot-list.md) |
 
 ## 이미지 만들기
 
