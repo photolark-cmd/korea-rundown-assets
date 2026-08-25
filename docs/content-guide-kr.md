@@ -203,10 +203,11 @@ node tools/render-thumbnails.mjs --profile kr --skip-existing
 > 한 편 올려보는 게 가장 빠릅니다. 1080×1080이 과하거나 다른 비율이 낫다면
 > `tools/profiles.json`의 `kr.width` / `kr.height`만 고치면 됩니다.
 
-### 처음 한 번 할 일
+### 하단 문구
 
-`tools/profiles.json`의 `kr.defaults.sub`가 자리표시자(`blog.naver.com/아이디`)입니다.
-실제 블로그 주소로 바꿔 주세요. 한 번 고치면 이후 모든 썸네일에 적용됩니다.
+시리즈명(`한국이 편한 이유`) · 브랜드(`코리아 런다운`) · 블로그 주소
+(`blog.naver.com/clark315`)는 `kr` 프로파일 기본값이라 CSV에 적지 않아도 붙습니다.
+바꾸려면 `tools/profiles.json`의 `kr.defaults`만 고치면 됩니다.
 
 ---
 

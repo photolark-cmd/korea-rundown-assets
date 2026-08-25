@@ -43,7 +43,7 @@ tools/                  렌더링 스크립트 · 프로파일 설정
 docs/                   콘텐츠 가이드 · 글 템플릿
 ```
 
-## 처음 한 번 할 일
+## 기본 문구 바꾸기
 
-`tools/profiles.json`의 `kr.defaults.sub`가 자리표시자(`blog.naver.com/아이디`)입니다.
-실제 네이버 블로그 주소로 바꾸면 이후 모든 국내 썸네일에 적용됩니다.
+시리즈명·브랜드·블로그 주소는 [`tools/profiles.json`](tools/profiles.json)의
+프로파일별 `defaults`에 있습니다. 한 곳만 고치면 이후 렌더되는 모든 썸네일에 반영됩니다.
