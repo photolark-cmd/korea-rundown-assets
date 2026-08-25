@@ -1,1 +1,4 @@
 slug,type,title,subtitle,series,highlight,prefix,suffix,note
+seoul-lunch-prices,stat,What a restaurant meal costs in Seoul right now,"July 2026 Seoul averages, converted at ₩1,383/USD (Aug 24, 2026).","Samgyetang ₩18,192=13.15|Naengmyeon ₩12,692=9.18|Gimbap ₩3,869=2.80","Gimbap ₩3,869",$,,Source: Korea Consumer Agency (참가격) monthly dining-out survey.
+dining-inflation-by-dish,bar,Korea's cheapest lunch is rising fastest,Year-on-year price change by dish. Gimbap leads the dining-out basket.,Gimbap=4.5|Samgyeopsal=4.3|Kalguksu=3.6|Naengmyeon=2.8|Samgyetang=2.8|Jajangmyeon=2.1,Gimbap,,%,Source: Korea Consumer Agency (참가격); July 2026 vs July 2025.
+gimbap-ingredients,bar,Why gimbap got expensive,Year-on-year change in its three core ingredients.,Rice=13.2|Eggs=9.0|Gim (seaweed)=2.5,Rice,,%,Source: Statistics Korea; Q2 2026 vs Q2 2025.

@@ -301,6 +301,13 @@ function buildJobs(opts) {
     if (type === 'stat' && items.length > 3) throw new Error(`${where}: stat takes at most 3 tiles`);
     if (type === 'bar' && items.length > 6) throw new Error(`${where}: bar takes at most 6 items - past that use a table`);
 
+    // A highlight that matches nothing renders with no emphasis at all, which
+    // is easy to miss in the output - say so rather than shipping a flat chart.
+    if (row.highlight && !items.some((d) => d.label === row.highlight)) {
+      console.warn(`! ${where}: highlight "${row.highlight}" matches no label in series ` +
+        `(${items.map((d) => d.label).join(', ')}) - nothing will be emphasised`);
+    }
+
     const file = path.join(opts.out, `${row.slug}.png`);
     if (opts.skipExisting && fs.existsSync(file)) {
       console.log(`- ${row.slug}.png (exists, skipped)`);
