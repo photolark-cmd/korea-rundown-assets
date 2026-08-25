@@ -17,6 +17,7 @@
 | 데이터 | `thumbnails.kr.csv` | `thumbnails.us.csv` |
 | 가이드 | [`docs/content-guide-kr.md`](docs/content-guide-kr.md) | [`docs/content-guide-us.md`](docs/content-guide-us.md) |
 | 글 템플릿 | [`docs/post-template-kr.md`](docs/post-template-kr.md) | [`docs/post-template-us.md`](docs/post-template-us.md) |
+| 뉴스 대응 | — | [`docs/newsjacking-playbook.md`](docs/newsjacking-playbook.md) |
 
 ## 썸네일 만들기
 
