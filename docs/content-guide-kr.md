@@ -2,6 +2,7 @@
 
 > **플랫폼: 네이버 블로그.** 영문 `korearundown.blogspot.com`(Blogger)과는 검색 생태계가
 > 다르므로 글쓰기 방식도 다릅니다. 네이버 특유의 운영 지침은 [§10](#10-네이버-블로그-운영-지침)에 모아 뒀습니다.
+> 영문용 가이드는 [`content-guide-us.md`](content-guide-us.md) — 수익화와 유튜브 연계가 **반대**입니다.
 
 ## 이 문서가 있는 이유
 
@@ -117,7 +118,7 @@ OECD 통계, 각국 교통공사·보건당국의 공식 요금표. **비교 글
 
 ## 4. 글 구조
 
-[`docs/post-template.md`](post-template.md)를 복사해서 채웁니다.
+[`docs/post-template-kr.md`](post-template-kr.md)를 복사해서 채웁니다.
 
 ---
 

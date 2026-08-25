@@ -1,7 +1,7 @@
 # 글 템플릿 (국내용)
 
 복사해서 채웁니다. 대괄호는 지우고 쓰세요.
-작성 지침은 [`domestic-content-guide.md`](domestic-content-guide.md).
+작성 지침은 [`content-guide-kr.md`](content-guide-kr.md).
 
 ---
 
