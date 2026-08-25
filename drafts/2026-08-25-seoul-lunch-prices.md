@@ -175,6 +175,8 @@ question.
 
 - [Korea's Ramen Prices Go Up in September — Except the One That Matters](./2026-08-25-korea-ramen-price-freeze.md) —
   the packet stayed frozen while cup noodles rose
+- [What ₩10,000 Buys at a Korean Convenience Store](./2026-08-25-konbini-lunch-budget.md) —
+  where the money went when restaurants got expensive
 - Part 1: Why Korea Has a Convenience Store for Every 950 People
 - Part 2: What Food Delivery Actually Costs in Korea
 

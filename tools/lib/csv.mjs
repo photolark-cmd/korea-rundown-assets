@@ -42,7 +42,14 @@ export function readRows(csvPath, required = []) {
     if (!header.includes(key)) throw new Error(`${csvPath} is missing a "${key}" column`);
   }
   return rows.slice(1).map((cells, idx) => {
-    const record = { __line: idx + 2 };
+    const line = idx + 2;
+    // More cells than headers almost always means an unquoted comma inside a
+    // field, which silently shifts every value after it into the wrong column.
+    if (cells.length > header.length) {
+      console.warn(`! ${csvPath}:${line}: ${cells.length} values for ${header.length} columns ` +
+        `- a field containing a comma probably needs wrapping in "quotes"`);
+    }
+    const record = { __line: line };
     header.forEach((key, col) => { record[key] = (cells[col] ?? '').trim(); });
     return record;
   });

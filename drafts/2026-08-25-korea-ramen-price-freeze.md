@@ -135,6 +135,8 @@ than a decision.
 
 - [Seoul's Cheapest Lunch Is Now Its Fastest-Rising Price](./2026-08-25-seoul-lunch-prices.md) — what
   a restaurant meal costs, and why gimbap is rising faster than samgyetang
+- [What ₩10,000 Buys at a Korean Convenience Store](./2026-08-25-konbini-lunch-budget.md) —
+  where the money went when restaurants got expensive
 - Part 1: Why Korea Has a Convenience Store for Every 950 People
 
 ## Sources
