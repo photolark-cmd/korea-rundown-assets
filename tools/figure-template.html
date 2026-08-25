@@ -1,0 +1,126 @@
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<style>
+  /* ------------------------------------------------------------------
+     In-article figure template for Korea Rundown.
+
+     Palette validated with the dataviz six checks in BOTH themes:
+       accent  #A87A1E  light L .62 / dark in-band, 3.40:1 on cream,
+                        3.91:1 on deep teal, chroma .12  -> all checks pass
+       de-emph #5C7A85 (light) / #7A9AA5 (dark)  -> deliberate low-chroma
+                        gray; contrast 4.07:1 / 5.00:1, accent separation
+                        deltaE 14.0-15.9 (target 8, normal-vision gate 15)
+     Emphasis form: Korea carries the accent, the comparison stays gray.
+     Never colour bars by value, and never put the series colour on text.
+     ------------------------------------------------------------------ */
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');
+
+  :root {
+    --fig-w:640px;
+    --pad:32px;
+
+    /* light theme (default) */
+    --surface:#F4F1EA;
+    --ink-1:#12333D;
+    --ink-2:#4A626B;
+    --grid:#DFD9CD;
+    --accent:#A87A1E;
+    --muted-mark:#5C7A85;
+
+    --bar-h:22px;        /* <= 24px: never fills the band */
+    --row-gap:18px;
+    --label-w:132px;
+    --plot-h:190px;
+    --gap:2px;           /* surface gap between touching marks */
+  }
+  [data-theme="dark"] {
+    --surface:#0E2A33;
+    --ink-1:#F4F1EA;
+    --ink-2:#A9C2CA;
+    --grid:#1C3E49;
+    --accent:#A87A1E;
+    --muted-mark:#7A9AA5;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { background:transparent; }
+  body {
+    font-family:'Inter','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .fig {
+    width:var(--fig-w);
+    background:var(--surface);
+    color:var(--ink-1);
+    padding:var(--pad);
+    display:flex; flex-direction:column;
+  }
+
+  .title { font-size:19px; font-weight:800; letter-spacing:-.015em; line-height:1.3;
+           word-break:keep-all; overflow-wrap:anywhere; }
+  .subtitle { margin-top:6px; font-size:13.5px; font-weight:500; color:var(--ink-2);
+              line-height:1.4; word-break:keep-all; overflow-wrap:anywhere; }
+  .plot { margin-top:22px; }
+
+  /* ---- horizontal bars (comparison) ---- */
+  .row { display:grid; grid-template-columns:var(--label-w) 1fr; align-items:center; gap:14px; }
+  .row + .row { margin-top:var(--row-gap); }
+  .row-label { font-size:13.5px; font-weight:600; color:var(--ink-2); text-align:right;
+               line-height:1.25; word-break:keep-all; }
+  .track { position:relative; height:var(--bar-h); }
+  .fill { position:absolute; left:0; top:0; height:100%; border-radius:0 4px 4px 0; }
+  .fill.on  { background:var(--accent); }        /* square at baseline, 4px data-end */
+  .fill.off { background:var(--muted-mark); }
+  /* Value rides its own bar's tip rather than a right-aligned column. */
+  .row-value { position:absolute; top:50%; transform:translateY(-50%);
+               font-size:15px; font-weight:700; color:var(--ink-1); white-space:nowrap; }
+
+  /* ---- columns (trend) ---- */
+  .colwrap { display:grid; grid-template-columns:auto 1fr; column-gap:11px; }
+  .yaxis { position:relative; height:var(--plot-h); }
+  .ytick { position:absolute; right:0; transform:translateY(-50%); font-size:11.5px;
+           color:var(--ink-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .cols { position:relative; height:var(--plot-h); display:flex; align-items:flex-end;
+          gap:var(--gap); }
+  .gridline { position:absolute; left:0; right:0; height:1px; background:var(--grid); }
+  .col { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+         height:100%; position:relative; }
+  .cbar { width:var(--bar-h); max-width:100%; border-radius:4px 4px 0 0; background:var(--muted-mark); }
+  .col.on .cbar { background:var(--accent); }
+  .cval { position:absolute; left:50%; transform:translateX(-50%); font-size:12.5px;
+          font-weight:700; color:var(--ink-1); white-space:nowrap; }
+  .xaxis { display:flex; gap:var(--gap); margin-top:9px; }
+  .xtick { flex:1; text-align:center; font-size:12px; color:var(--ink-2);
+           font-variant-numeric:tabular-nums; }
+
+  /* ---- stat tiles ---- */
+  .tiles { display:flex; gap:26px; }
+  .tile { flex:1; }
+  .tile-label { font-size:12.5px; font-weight:600; color:var(--ink-2); line-height:1.3;
+                word-break:keep-all; }
+  .tile-value { margin-top:7px; font-size:40px; font-weight:800; letter-spacing:-.03em;
+                line-height:1.05; color:var(--ink-1);
+                font-variant-numeric:proportional-nums; white-space:nowrap; }
+  .tile.on .tile-rule { background:var(--accent); }
+  .tile-rule { width:30px; height:3px; background:var(--muted-mark); margin-bottom:11px; }
+  .tile-note { margin-top:7px; font-size:12px; color:var(--ink-2); line-height:1.35;
+               word-break:keep-all; }
+
+  /* ---- footer ---- */
+  .foot { margin-top:22px; padding-top:13px; border-top:1px solid var(--grid);
+          display:flex; justify-content:space-between; align-items:baseline; gap:16px; }
+  .note { font-size:11.5px; color:var(--ink-2); line-height:1.4; word-break:keep-all; }
+  .brand { font-size:11px; font-weight:800; letter-spacing:.11em; color:var(--ink-2);
+           white-space:nowrap; }
+</style>
+
+<div class="fig" id="fig">
+  <div class="title" id="title">Figure title</div>
+  <div class="subtitle" id="subtitle">Subtitle</div>
+  <div class="plot" id="plot"></div>
+  <div class="foot">
+    <div class="note" id="note">Source:</div>
+    <div class="brand" id="brand">KOREA RUNDOWN</div>
+  </div>
+</div>

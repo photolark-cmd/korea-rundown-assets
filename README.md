@@ -19,16 +19,20 @@
 | 글 템플릿 | [`docs/post-template-kr.md`](docs/post-template-kr.md) | [`docs/post-template-us.md`](docs/post-template-us.md) |
 | 뉴스 대응 | — | [`docs/newsjacking-playbook.md`](docs/newsjacking-playbook.md) |
 
-## 썸네일 만들기
+## 이미지 만들기
 
-CSV 한 줄 = PNG 한 장. 디자인은 [`_template.html`](_template.html) 한 곳에 있습니다.
+CSV 한 줄 = PNG 한 장.
 
 ```bash
 npm install --prefix tools && npx playwright install chromium   # 최초 1회
 
+# 글 대표 썸네일
 node tools/render-thumbnails.mjs                  # 영문 (기본)
 node tools/render-thumbnails.mjs --profile kr     # 국내
 node tools/render-thumbnails.mjs --profile us,kr  # 둘 다
+
+# 본문용 비교 차트 · 추이 차트 · 숫자 카드
+node tools/render-figures.mjs
 ```
 
 옵션과 CSV 형식은 [`tools/README.md`](tools/README.md).
@@ -39,9 +43,11 @@ node tools/render-thumbnails.mjs --profile us,kr  # 둘 다
 _template.html          썸네일 템플릿 (CSS 변수로 두 포맷 공용)
 thumbnails.us.csv       영문 썸네일 데이터
 thumbnails.kr.csv       국내 썸네일 데이터
+figures.csv             본문용 이미지 데이터
+figures.example.csv     본문용 이미지 예시 (숫자는 전부 예시)
 part1~4-*.png           영문 썸네일 (Why Korea Is So Convenient)
-tools/                  렌더링 스크립트 · 프로파일 설정
-docs/                   콘텐츠 가이드 · 글 템플릿
+tools/                  렌더링 스크립트 · 템플릿 · 프로파일 설정
+docs/                   콘텐츠 가이드 · 글 템플릿 · 뉴스 대응 플레이북
 ```
 
 ## 기본 문구 바꾸기

@@ -1,7 +1,14 @@
-# 썸네일 일괄 렌더링
+# 이미지 렌더링 도구
 
-CSV 한 줄 = 썸네일 PNG 한 장. 디자인은 전부 `_template.html`에 있고,
-이 스크립트는 값을 채워 넣고 글자 크기를 맞춘 뒤 1200×630으로 캡처만 합니다.
+CSV 한 줄 = PNG 한 장. 도구는 두 개입니다.
+
+| 스크립트 | 만드는 것 | 템플릿 |
+|---|---|---|
+| `render-thumbnails.mjs` | **글 대표 썸네일** (시장별 규격) | `_template.html` |
+| `render-figures.mjs` | **본문용 차트·숫자 카드** | `figure-template.html` |
+
+디자인은 전부 템플릿에 있고, 스크립트는 값을 채워 넣고 크기를 맞춘 뒤 캡처만 합니다.
+아래 **폰트** 절은 두 도구에 공통으로 적용됩니다.
 
 ## 준비 (최초 1회)
 
@@ -28,7 +35,7 @@ node tools/render-thumbnails.mjs --list-profiles
 크기입니다. 정의는 [`profiles.json`](profiles.json)에 있고, 크기·여백·기본 문구를
 바꾸려면 그 파일만 고치면 됩니다.
 
-## 실행
+## 썸네일 렌더링
 
 ```bash
 node tools/render-thumbnails.mjs                  # us (기본)
@@ -54,7 +61,7 @@ node tools/render-thumbnails.mjs --profile us,kr --dry-run
 
 `--csv` / `--out`은 프로파일 설정을 덮어씁니다. 단 프로파일을 하나만 지정했을 때만 쓸 수 있습니다.
 
-## CSV 형식
+## 썸네일 CSV 형식
 
 | 컬럼 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
@@ -96,7 +103,76 @@ part3-subway,Part 3,$1.10,a ride,Seoul charges for **distance**.|New York charge
 
 한글은 `word-break: keep-all`이 적용돼 어절 중간에서 끊기지 않습니다.
 
-## 폰트
+## 본문용 이미지 (`render-figures.mjs`)
+
+썸네일과 별개로, **글 본문에 넣을 비교 차트·추이 차트·숫자 카드**를 CSV에서 뽑습니다.
+디자인은 [`figure-template.html`](figure-template.html)에 있습니다.
+
+```bash
+node tools/render-figures.mjs                          # figures.csv -> figures/
+node tools/render-figures.mjs --csv figures.example.csv --out /tmp/demo   # 예시 4장
+node tools/render-figures.mjs --theme dark             # 썸네일과 같은 딥틸 배경
+```
+
+기본 출력은 **640 CSS px 폭을 2배 해상도(1280px)** 로 렌더합니다. 블로그 본문 폭에 맞춰
+`--width`를 조정하세요. 높이는 내용에 따라 자동으로 정해집니다.
+
+### 타입 3가지
+
+| `type` | 쓸 곳 | 형태 |
+|---|---|---|
+| `bar` | **한국 vs 미국 비교** (핵심 용도) | 가로 막대, 최대 6개 |
+| `column` | 연도별 추이 | 세로 막대 + y축 눈금 |
+| `stat` | 숫자 카드 | 큰 숫자 타일, 최대 3개 |
+
+### CSV 컬럼
+
+| 컬럼 | 필수 | 설명 |
+|---|---|---|
+| `slug` | ✅ | 출력 파일명 |
+| `type` | ✅ | `bar` · `column` · `stat` |
+| `title` | ✅ | 제목. **결론을 문장으로** 쓰세요 (`Seoul costs a third of New York's`) |
+| `series` | ✅ | `이름=값\|이름=값` — 값은 숫자 |
+| `subtitle` | | 제목 아래 한 줄. 단위·기준을 여기에 |
+| `highlight` | | 강조할 항목 이름 (기본값: 첫 번째) |
+| `prefix` / `suffix` | | 값 앞뒤에 붙일 문자 (`$`, `원` 등) |
+| `note` | | 좌하단 출처 줄 |
+| `theme` | | `light`(기본) · `dark` — 행마다 지정 가능 |
+
+> ⚠️ **쉼표가 든 값은 큰따옴표로 감싸세요.** `"서울=1,400\|뉴욕=4,000"` — 안 그러면
+> CSV 컬럼이 쪼개집니다.
+
+**숫자는 쓴 그대로 표시됩니다.** `1.10`이라 쓰면 `1.10`, `1,550`이라 쓰면 `1,550`.
+소수점 자릿수와 천 단위 쉼표를 직접 통제하시라는 뜻입니다. 막대 길이는 숫자값으로 계산합니다.
+
+### 설계 규칙 (지켜져 있습니다)
+
+- **강조 형식** — 한국은 골드, 비교 대상은 회색. 값 크기에 따라 색을 바꾸지 않습니다
+  (막대 길이가 이미 보여주는 걸 색이 중복으로 표현하면 안 됨)
+- 막대는 22px 이하, 데이터 끝만 4px 둥글게, **0에서 시작**
+- 값은 각 막대 끝에 붙고, 도형 밖으로 넘치지 않게 막대 길이를 자동으로 줄입니다
+- 세로 차트는 y축 눈금이 있어서, 직접 라벨이 안 붙은 막대도 값을 읽을 수 있습니다
+- 격자선은 1px 실선, 배경에서 한 단계만 떨어진 색
+- **텍스트에는 데이터 색을 쓰지 않습니다** — 색은 막대가, 글자는 잉크 색이 담당
+
+팔레트는 밝은/어두운 두 배경 모두에서 대비·색각이상 분리도 검사를 통과한 값입니다
+(검증 내역은 `figure-template.html` 상단 주석 참고). 색을 바꾸실 거면 재검증이 필요합니다.
+
+### 표는 이미지로 만들지 마세요
+
+이미지 속 숫자는 검색에 색인되지 않습니다. **표는 HTML 텍스트로, 차트는 이미지로** —
+둘은 역할이 다릅니다. 자세한 내용은
+[`docs/content-guide-us.md` §5](../docs/content-guide-us.md).
+
+### 예시 파일
+
+`figures.example.csv`에 4가지 타입 예시가 있습니다. **거기 숫자는 전부 예시이고
+검증되지 않았습니다** — 이미지 하단에도 그렇게 찍히니, 실제 발행에는
+`figures.csv`에 검증된 값을 직접 채워 쓰세요.
+
+---
+
+## 폰트 (두 도구 공통)
 
 템플릿은 Google Fonts에서 **Inter**(영문)와 **Noto Sans KR**(한글)을 불러옵니다.
 따라서 렌더링에는 네트워크가 필요합니다.
@@ -129,7 +205,9 @@ node tools/render-thumbnails.mjs --profile us,kr --font-css tools/fonts/local.cs
 `tools/fonts/`는 `.gitignore`에 있습니다. 한글(Noto Sans KR)은 유니코드 구간별로
 124개 파일로 쪼개져 있어(약 3.7MB) 내장하지 않았습니다. 한글 썸네일은 네트워크가 필요합니다.
 
-## 옵션
+## 옵션 — `render-thumbnails.mjs`
+
+`render-figures.mjs`의 옵션은 `node tools/render-figures.mjs --help`로 보세요.
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
