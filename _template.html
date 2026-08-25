@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="google" content="notranslate">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');
   * { margin:0; padding:0; box-sizing:border-box; }
   html { background:#0E2A33; }
   body {
@@ -9,7 +9,7 @@
     background:
       radial-gradient(1100px 620px at 78% 12%, rgba(46,140,158,.42) 0%, rgba(46,140,158,0) 62%),
       linear-gradient(148deg, #0E2A33 0%, #113B47 52%, #0C222A 100%);
-    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-family:'Inter','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     color:#F4F1EA;
     padding:56px 64px 48px;
     display:flex; flex-direction:column;
@@ -32,7 +32,7 @@
     font-size:13px; font-weight:700; letter-spacing:.17em; text-transform:uppercase;
     color:#7FC3D4;
   }
-  .rule { width:40px; height:2px; background:#D9A441; }
+  .rule { width:40px; height:2px; background:#D9A441; flex:none; }
   .part { color:#D9A441; }
 
   .stack { margin-top:auto; }
@@ -40,13 +40,17 @@
   .figure {
     font-size:150px; font-weight:900; letter-spacing:-.045em; line-height:.92;
     color:#FFFFFF;
+    white-space:nowrap;
   }
-  .figure .unit { font-size:60px; font-weight:800; letter-spacing:-.02em; color:#9FD3E0; margin-left:12px; }
+  .figure .unit { font-size:.4em; font-weight:800; letter-spacing:-.02em; color:#9FD3E0; margin-left:12px; }
 
   .kicker {
     margin-top:20px;
     font-size:37px; font-weight:800; letter-spacing:-.022em; line-height:1.22;
     color:#F4F1EA; max-width:960px;
+    /* keep-all breaks Korean at word boundaries, not mid-word;
+       anywhere is the escape hatch for a single unbreakable string */
+    word-break:keep-all; overflow-wrap:anywhere;
   }
   .kicker b { color:#F3C063; font-weight:800; }
 
@@ -63,17 +67,17 @@
 <div class="inner">
   <div class="series">
     <span class="rule"></span>
-    <span>Why Korea Is So Convenient</span>
-    <span class="part">&middot; Part 3</span>
+    <span id="series">Why Korea Is So Convenient</span>
+    <span class="part" id="part">&middot; Part 3</span>
   </div>
 
   <div class="stack">
-    <div class="figure">$1.10<span class="unit">a ride</span></div>
-    <div class="kicker">Seoul charges for <b>distance</b>.<br>New York charges for the turnstile.</div>
+    <div class="figure" id="figure">$1.10<span class="unit" id="unit">a ride</span></div>
+    <div class="kicker" id="kicker">Seoul charges for <b>distance</b>.<br>New York charges for the turnstile.</div>
   </div>
 
   <div class="foot">
-    <div class="brand">KOREA RUNDOWN</div>
-    <div class="sub">korearundown.blogspot.com</div>
+    <div class="brand" id="brand">KOREA RUNDOWN</div>
+    <div class="sub" id="sub">korearundown.blogspot.com</div>
   </div>
 </div>
