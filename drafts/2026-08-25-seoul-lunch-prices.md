@@ -173,6 +173,8 @@ question.
 
 ## Related
 
+- [Korea's Ramen Prices Go Up in September — Except the One That Matters](./2026-08-25-korea-ramen-price-freeze.md) —
+  the packet stayed frozen while cup noodles rose
 - Part 1: Why Korea Has a Convenience Store for Every 950 People
 - Part 2: What Food Delivery Actually Costs in Korea
 
