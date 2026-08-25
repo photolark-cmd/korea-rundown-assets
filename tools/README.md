@@ -1,6 +1,6 @@
 # 썸네일 일괄 렌더링
 
-`thumbnails.csv` 한 줄 = 썸네일 PNG 한 장. 디자인은 전부 `_template.html`에 있고,
+CSV 한 줄 = 썸네일 PNG 한 장. 디자인은 전부 `_template.html`에 있고,
 이 스크립트는 값을 채워 넣고 글자 크기를 맞춘 뒤 1200×630으로 캡처만 합니다.
 
 ## 준비 (최초 1회)
@@ -10,27 +10,50 @@ npm install --prefix tools
 npx playwright install chromium
 ```
 
+## 프로파일 — 시장별로 분리돼 있습니다
+
+영문 블로그와 국내 블로그는 규격도 문구도 다르므로 **프로파일**로 나눠 뒀습니다.
+각 프로파일은 자기 CSV · 출력 폴더 · 이미지 크기 · 기본 문구를 가집니다.
+
+| 프로파일 | 대상 | 크기 | CSV | 출력 |
+|---|---|---|---|---|
+| `us` (기본) | 영문 블로그 (Blogger) | 1200×630 | `thumbnails.us.csv` | 저장소 루트 |
+| `kr` | 국내 블로그 (네이버) | 1080×1080 | `thumbnails.kr.csv` | `kr/` |
+
+```bash
+node tools/render-thumbnails.mjs --list-profiles
+```
+
+`us`는 OG 미리보기 규격, `kr`은 네이버 목록·검색의 정사각 대표이미지에 맞춘
+크기입니다. 정의는 [`profiles.json`](profiles.json)에 있고, 크기·여백·기본 문구를
+바꾸려면 그 파일만 고치면 됩니다. **네이버 블로그 주소(`sub`)는 자리표시자
+(`blog.naver.com/아이디`)이니 실제 주소로 바꿔 주세요.**
+
 ## 실행
 
 ```bash
-node tools/render-thumbnails.mjs
+node tools/render-thumbnails.mjs                  # us (기본)
+node tools/render-thumbnails.mjs --profile kr     # 국내용
+node tools/render-thumbnails.mjs --profile us,kr  # 둘 다
 ```
 
-`thumbnails.csv`를 읽어 저장소 루트에 `<slug>.png`를 씁니다. 4장 기준 약 1.5초.
+4장 기준 약 1.5초.
 
 ```bash
 # 일부만 다시 그리기
 node tools/render-thumbnails.mjs --only part3-subway,part4-healthcare
 
 # 이미 있는 파일은 건너뛰기 (새로 추가한 행만 렌더)
-node tools/render-thumbnails.mjs --skip-existing
+node tools/render-thumbnails.mjs --profile kr --skip-existing
 
 # 다른 폴더에 2배 해상도로
 node tools/render-thumbnails.mjs --out drafts --scale 2
 
 # 뭐가 써질지만 확인
-node tools/render-thumbnails.mjs --dry-run
+node tools/render-thumbnails.mjs --profile us,kr --dry-run
 ```
+
+`--csv` / `--out`은 프로파일 설정을 덮어씁니다. 단 프로파일을 하나만 지정했을 때만 쓸 수 있습니다.
 
 ## CSV 형식
 
@@ -41,11 +64,18 @@ node tools/render-thumbnails.mjs --dry-run
 | `kicker` | ✅ | — | 숫자 아래 문장 |
 | `unit` | | 없음 | 숫자 뒤 작은 단위 |
 | `part` | | 없음 | 상단 우측 파트 표기. 비우면 표시 안 함 |
-| `series` | | `Why Korea Is So Convenient` | 상단 시리즈명 |
-| `brand` | | `KOREA RUNDOWN` | 좌하단 |
-| `sub` | | `korearundown.blogspot.com` | 우하단 |
+| `series` | | 프로파일 기본값 | 상단 시리즈명 |
+| `brand` | | 프로파일 기본값 | 좌하단 |
+| `sub` | | 프로파일 기본값 | 우하단 |
 
-컬럼 순서는 상관없고, 없는 컬럼은 기본값이 쓰입니다.
+컬럼 순서는 상관없고, 없는 컬럼은 **해당 프로파일의 기본값**이 쓰입니다.
+`series` · `brand` · `sub`를 시장마다 다시 적을 필요가 없다는 뜻입니다.
+
+| | `us` | `kr` |
+|---|---|---|
+| `series` | `Why Korea Is So Convenient` | `한국이 편한 이유` |
+| `brand` | `KOREA RUNDOWN` | `코리아 런다운` |
+| `sub` | `korearundown.blogspot.com` | `blog.naver.com/아이디` ← 수정 필요 |
 
 ### 카피 표기법
 
@@ -61,7 +91,8 @@ part3-subway,Part 3,$1.10,a ride,Seoul charges for **distance**.|New York charge
 ### 자동 크기 조정
 
 숫자가 가로로 넘치거나 문장이 세로로 넘치면 자동으로 줄어듭니다
-(숫자 150→56px, 문장 37→22px). 줄어든 경우 실행 로그에 `auto-fit`으로 표시됩니다.
+(`us` 기준 숫자 150→56px, 문장 37→22px. 범위는 프로파일의 `type`에서 조정).
+줄어든 경우 실행 로그에 `auto-fit`으로 표시됩니다.
 최소 크기로도 안 들어가면 경고와 함께 종료 코드 1을 반환하니, 그 행은 카피를 줄이면 됩니다.
 
 한글은 `word-break: keep-all`이 적용돼 어절 중간에서 끊기지 않습니다.
@@ -93,7 +124,7 @@ cat > tools/fonts/local.css <<'CSS'
   font-display:block;src:url('inter.woff2') format('woff2');}
 CSS
 
-node tools/render-thumbnails.mjs --font-css tools/fonts/local.css
+node tools/render-thumbnails.mjs --profile us,kr --font-css tools/fonts/local.css
 ```
 
 `tools/fonts/`는 `.gitignore`에 있습니다. 한글(Noto Sans KR)은 유니코드 구간별로
@@ -103,8 +134,10 @@ node tools/render-thumbnails.mjs --font-css tools/fonts/local.css
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--csv <path>` | `thumbnails.csv` | 입력 CSV |
-| `--out <dir>` | 저장소 루트 | 출력 폴더 |
+| `--profile <name,...>` | `us` | 렌더할 시장. 쉼표로 여러 개 |
+| `--list-profiles` | — | 설정된 프로파일 보기 |
+| `--csv <path>` | 프로파일 설정 | 입력 CSV (단일 프로파일에서만) |
+| `--out <dir>` | 프로파일 설정 | 출력 폴더 (단일 프로파일에서만) |
 | `--template <path>` | `_template.html` | 템플릿 |
 | `--only <slug,...>` | — | 지정한 행만 |
 | `--scale <n>` | `1` | 2면 2400×1260 |

@@ -1,0 +1,43 @@
+{
+  "us": {
+    "label": "영문 블로그 (Blogger) · 1200×630 OG 규격",
+    "csv": "thumbnails.us.csv",
+    "out": ".",
+    "width": 1200,
+    "height": 630,
+    "vars": {},
+    "type": { "figureMax": 150, "figureMin": 56, "kickerMax": 37, "kickerMin": 22 },
+    "defaults": {
+      "series": "Why Korea Is So Convenient",
+      "brand": "KOREA RUNDOWN",
+      "sub": "korearundown.blogspot.com"
+    }
+  },
+  "kr": {
+    "label": "국내 블로그 (네이버) · 1080×1080 정사각 대표이미지",
+    "csv": "thumbnails.kr.csv",
+    "out": "kr",
+    "width": 1080,
+    "height": 1080,
+    "vars": {
+      "--pad-x": "76px",
+      "--pad-top": "68px",
+      "--pad-bottom": "64px",
+      "--glow": "1000px 1000px",
+      "--grid": "90px",
+      "--series-size": "15px",
+      "--figure-size": "150px",
+      "--kicker-size": "44px",
+      "--kicker-max": "928px",
+      "--brand-size": "17px",
+      "--sub-size": "15px",
+      "--stack-mb": "auto"
+    },
+    "type": { "figureMax": 150, "figureMin": 56, "kickerMax": 44, "kickerMin": 26 },
+    "defaults": {
+      "series": "한국이 편한 이유",
+      "brand": "코리아 런다운",
+      "sub": "blog.naver.com/아이디"
+    }
+  }
+}

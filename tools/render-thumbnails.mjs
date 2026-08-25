@@ -17,19 +17,21 @@ import { execSync } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const WIDTH = 1200;
-const HEIGHT = 630;
-const FIGURE_MAX = 150, FIGURE_MIN = 56;   // px, matches _template.html
-const KICKER_MAX = 37, KICKER_MIN = 22;
+const PROFILES_PATH = path.join(REPO_ROOT, 'tools', 'profiles.json');
 
 /* ---------------------------------------------------------------- options */
 
 const HELP = `Batch-render Korea Rundown thumbnails from a CSV.
 
-  node tools/render-thumbnails.mjs [options]
+  node tools/render-thumbnails.mjs [--profile <name>] [options]
 
-  --csv <path>            input CSV                (default: thumbnails.csv)
-  --out <dir>             output directory         (default: repo root)
+Each market is a profile in tools/profiles.json - its own CSV, output folder,
+image size and default series/brand/footer. Pass several with a comma.
+
+  --profile <name,...>    which market(s) to render    (default: us)
+  --list-profiles         show the configured profiles
+  --csv <path>            override the profile's CSV
+  --out <dir>             override the profile's output folder
   --template <path>       HTML template            (default: _template.html)
   --only <slug,...>       render just these rows
   --scale <n>             device scale factor, 2 = retina (default: 1)
@@ -44,8 +46,10 @@ const HELP = `Batch-render Korea Rundown thumbnails from a CSV.
 
 function parseArgs(argv) {
   const opts = {
-    csv: path.join(REPO_ROOT, 'thumbnails.csv'),
-    out: REPO_ROOT,
+    profile: 'us',
+    listProfiles: false,
+    csv: null,
+    out: null,
     template: path.join(REPO_ROOT, '_template.html'),
     only: null,
     scale: 1,
@@ -64,6 +68,8 @@ function parseArgs(argv) {
       return v;
     };
     switch (arg) {
+      case '--profile': opts.profile = value(); break;
+      case '--list-profiles': opts.listProfiles = true; break;
       case '--csv': opts.csv = path.resolve(value()); break;
       case '--out': opts.out = path.resolve(value()); break;
       case '--template': opts.template = path.resolve(value()); break;
@@ -245,12 +251,48 @@ async function waitForFonts(page, timeoutMs = 15000) {
 
 /* ------------------------------------------------------------------- main */
 
-function buildJobs(opts) {
-  let rows = readRows(opts.csv);
+function loadProfiles() {
+  let raw;
+  try { raw = fs.readFileSync(PROFILES_PATH, 'utf8'); }
+  catch { throw new Error(`profiles file not found: ${PROFILES_PATH}`); }
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (e) { throw new Error(`${PROFILES_PATH} is not valid JSON: ${e.message}`); }
+  for (const [name, p] of Object.entries(parsed)) {
+    for (const key of ['csv', 'out', 'width', 'height']) {
+      if (p[key] === undefined) throw new Error(`profile "${name}" is missing "${key}"`);
+    }
+  }
+  return parsed;
+}
+
+function resolveProfile(profiles, name, opts) {
+  const p = profiles[name];
+  if (!p) throw new Error(`unknown profile "${name}" (available: ${Object.keys(profiles).join(', ')})`);
+  return {
+    name,
+    label: p.label || name,
+    csv: opts.csv || path.resolve(REPO_ROOT, p.csv),
+    out: opts.out || path.resolve(REPO_ROOT, p.out),
+    width: p.width,
+    height: p.height,
+    // Size is derived from the profile so the CSS box and the screenshot clip
+    // can never drift apart; profiles.json only tunes the rest.
+    vars: { '--w': `${p.width}px`, '--h': `${p.height}px`, ...(p.vars || {}) },
+    limits: { figureMax: 150, figureMin: 56, kickerMax: 37, kickerMin: 22, ...(p.type || {}) },
+    defaults: {
+      series: '', brand: '', sub: '',
+      ...(p.defaults || {}),
+    },
+  };
+}
+
+function buildJobs(opts, profile) {
+  let rows = readRows(profile.csv);
   if (opts.only) {
     const wanted = new Set(opts.only);
     const present = new Set(rows.map((r) => r.slug));
-    for (const slug of wanted) if (!present.has(slug)) console.warn(`! --only "${slug}" matches no row`);
+    for (const slug of wanted) if (!present.has(slug)) console.warn(`! --only "${slug}" matches no row in ${profile.name}`);
     rows = rows.filter((r) => wanted.has(r.slug));
   }
 
@@ -263,22 +305,22 @@ function buildJobs(opts) {
       : seen.has(row.slug) ? `duplicate slug "${row.slug}"`
       : !row.figure ? `row "${row.slug}" has no figure`
       : null;
-    if (problem) throw new Error(`${opts.csv}:${row.__line}: ${problem}`);
+    if (problem) throw new Error(`${profile.csv}:${row.__line}: ${problem}`);
     seen.add(row.slug);
 
-    const file = path.join(opts.out, `${row.slug}.png`);
+    const file = path.join(profile.out, `${row.slug}.png`);
     if (opts.skipExisting && fs.existsSync(file)) {
-      console.log(`- ${row.slug}.png (exists, skipped)`);
+      console.log(`  - ${row.slug}.png (exists, skipped)`);
       continue;
     }
     const fields = {
-      series: row.series || 'Why Korea Is So Convenient',
+      series: row.series || profile.defaults.series,
       part: row.part || '',
       figure: row.figure,
       unit: row.unit || '',
       kicker: row.kicker || '',
-      brand: row.brand || 'KOREA RUNDOWN',
-      sub: row.sub || 'korearundown.blogspot.com',
+      brand: row.brand || profile.defaults.brand,
+      sub: row.sub || profile.defaults.sub,
     };
     jobs.push({
       slug: row.slug,
@@ -298,70 +340,47 @@ function buildJobs(opts) {
   return jobs;
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) { process.stdout.write(HELP); return 0; }
-
-  const inputs = [['CSV', opts.csv], ['Template', opts.template]];
-  if (opts.fontCss) inputs.push(['Font CSS', opts.fontCss]);
-  for (const [label, target] of inputs) {
-    if (!fs.existsSync(target)) throw new Error(`${label} not found: ${target}`);
-  }
-
-  const jobs = buildJobs(opts);
-  if (!jobs.length) { console.log('Nothing to render.'); return 0; }
-  if (opts.dryRun) {
-    for (const job of jobs) console.log(`would write ${path.relative(process.cwd(), job.file)}`);
-    return 0;
-  }
-
-  fs.mkdirSync(opts.out, { recursive: true });
-  const templateUrl = pathToFileURL(opts.template).href;
-  const fontCss = opts.fontCss ? readFontCss(opts.fontCss) : null;
-
-  const { chromium } = loadPlaywright();
-  // Honour the standard proxy variables; Chromium does not read them itself.
-  const proxyServer = process.env.HTTPS_PROXY || process.env.https_proxy || null;
-  const browser = await chromium.launch(proxyServer ? { proxy: { server: proxyServer } } : {});
+/** Render one profile's jobs in its own browser context (its own viewport). */
+async function renderProfile(browser, profile, jobs, opts, ctx) {
   const context = await browser.newContext({
-    viewport: { width: WIDTH, height: HEIGHT },
+    viewport: { width: profile.width, height: profile.height },
     deviceScaleFactor: opts.scale,
   });
-  // With local fonts there is nothing to fetch; don't stall on a blocked network.
-  if (fontCss) await context.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  if (ctx.fontCss) await context.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
 
-  const limits = {
-    figureMax: FIGURE_MAX, figureMin: FIGURE_MIN,
-    kickerMax: KICKER_MAX, kickerMin: KICKER_MIN,
-  };
-  const problems = [];
-  const missingFonts = new Set();
   const queue = jobs.slice();
-
   const worker = async () => {
     const page = await context.newPage();
     try {
       while (queue.length) {
         const job = queue.shift();
-        await page.goto(templateUrl, { waitUntil: 'domcontentloaded' });
-        if (fontCss) await page.addStyleTag({ content: fontCss });
+        await page.goto(ctx.templateUrl, { waitUntil: 'domcontentloaded' });
+        if (ctx.fontCss) await page.addStyleTag({ content: ctx.fontCss });
+        if (Object.keys(profile.vars).length) {
+          await page.evaluate((vars) => {
+            for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+          }, profile.vars);
+        }
 
         // Fill first so the faces the copy actually needs start downloading,
         // then re-fit once they are in: metrics change under the real face.
-        await page.evaluate(applyRow, [job.data, limits]);
+        await page.evaluate(applyRow, [job.data, profile.limits]);
         const loaded = await waitForFonts(page);
-        const fitted = await page.evaluate(applyRow, [job.data, limits]);
+        const fitted = await page.evaluate(applyRow, [job.data, profile.limits]);
 
-        if (!loaded.includes('Inter')) missingFonts.add('Inter');
-        if (job.korean && !loaded.some((f) => /Noto Sans KR/i.test(f))) missingFonts.add('Noto Sans KR');
-        if (fitted.overflow) problems.push(`${job.slug}: copy is too long to fit even at minimum type size`);
+        if (!loaded.includes('Inter')) ctx.missingFonts.add('Inter');
+        if (job.korean && !loaded.some((f) => /Noto Sans KR/i.test(f))) ctx.missingFonts.add('Noto Sans KR');
+        if (fitted.overflow) ctx.problems.push(`${profile.name}/${job.slug}: copy is too long to fit even at minimum type size`);
 
-        await page.screenshot({ path: job.file, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } });
+        await page.screenshot({
+          path: job.file,
+          clip: { x: 0, y: 0, width: profile.width, height: profile.height },
+        });
 
         const notes = [];
-        if (fitted.figureSize !== FIGURE_MAX) notes.push(`figure ${fitted.figureSize}px`);
-        if (fitted.kickerSize !== KICKER_MAX) notes.push(`kicker ${fitted.kickerSize}px`);
-        console.log(`+ ${job.slug}.png${notes.length ? `  (auto-fit: ${notes.join(', ')})` : ''}`);
+        if (fitted.figureSize !== profile.limits.figureMax) notes.push(`figure ${fitted.figureSize}px`);
+        if (fitted.kickerSize !== profile.limits.kickerMax) notes.push(`kicker ${fitted.kickerSize}px`);
+        console.log(`  + ${job.slug}.png${notes.length ? `  (auto-fit: ${notes.join(', ')})` : ''}`);
       }
     } finally {
       await page.close();
@@ -371,13 +390,79 @@ async function main() {
   try {
     await Promise.all(Array.from({ length: Math.min(opts.concurrency, jobs.length) }, worker));
   } finally {
+    await context.close();
+  }
+}
+
+/* ------------------------------------------------------------------- main */
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.help) { process.stdout.write(HELP); return 0; }
+
+  const profiles = loadProfiles();
+  if (opts.listProfiles) {
+    for (const [name, p] of Object.entries(profiles)) {
+      console.log(`${name.padEnd(8)} ${p.width}\u00d7${p.height}  ${p.csv} -> ${p.out}/`);
+      if (p.label) console.log(`${' '.repeat(9)}${p.label}`);
+    }
+    return 0;
+  }
+
+  const names = opts.profile.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!names.length) throw new Error('--profile needs at least one name');
+  if (names.length > 1 && (opts.csv || opts.out)) {
+    throw new Error('--csv and --out apply to a single profile; pass one --profile with them');
+  }
+  const resolved = names.map((n) => resolveProfile(profiles, n, opts));
+
+  const inputs = [['Template', opts.template]];
+  if (opts.fontCss) inputs.push(['Font CSS', opts.fontCss]);
+  for (const p of resolved) inputs.push([`Profile "${p.name}" CSV`, p.csv]);
+  for (const [label, target] of inputs) {
+    if (!fs.existsSync(target)) throw new Error(`${label} not found: ${target}`);
+  }
+
+  const plans = [];
+  for (const profile of resolved) {
+    console.log(`\u25b8 ${profile.name}  ${profile.label}`);
+    plans.push({ profile, jobs: buildJobs(opts, profile) });
+  }
+  const total = plans.reduce((n, p) => n + p.jobs.length, 0);
+  if (!total) { console.log('Nothing to render.'); return 0; }
+
+  if (opts.dryRun) {
+    for (const { jobs } of plans) {
+      for (const job of jobs) console.log(`  would write ${path.relative(process.cwd(), job.file)}`);
+    }
+    return 0;
+  }
+
+  const ctx = {
+    templateUrl: pathToFileURL(opts.template).href,
+    fontCss: opts.fontCss ? readFontCss(opts.fontCss) : null,
+    problems: [],
+    missingFonts: new Set(),
+  };
+
+  const { chromium } = loadPlaywright();
+  // Honour the standard proxy variables; Chromium does not read them itself.
+  const proxyServer = process.env.HTTPS_PROXY || process.env.https_proxy || null;
+  const browser = await chromium.launch(proxyServer ? { proxy: { server: proxyServer } } : {});
+  try {
+    for (const { profile, jobs } of plans) {
+      if (!jobs.length) continue;
+      fs.mkdirSync(profile.out, { recursive: true });
+      await renderProfile(browser, profile, jobs, opts, ctx);
+    }
+  } finally {
     await browser.close();
   }
 
-  for (const p of problems) console.warn(`! ${p}`);
+  for (const p of ctx.problems) console.warn(`! ${p}`);
 
-  if (missingFonts.size) {
-    const list = [...missingFonts].join(', ');
+  if (ctx.missingFonts.size) {
+    const list = [...ctx.missingFonts].join(', ');
     const message =
       `${list} did not load, so these PNGs use fallback fonts and do not match the ` +
       `existing thumbnails.\n  Check network access to fonts.googleapis.com, or pass ` +
@@ -388,8 +473,10 @@ async function main() {
     console.warn(`! ${message}`);
   }
 
-  console.log(`\n${jobs.length} thumbnail${jobs.length === 1 ? '' : 's'} -> ${path.relative(process.cwd(), opts.out) || '.'}`);
-  return problems.length ? 1 : 0;
+  const where = plans.filter((p) => p.jobs.length)
+    .map((p) => `${path.relative(process.cwd(), p.profile.out) || '.'}`).join(', ');
+  console.log(`\n${total} thumbnail${total === 1 ? '' : 's'} -> ${where}`);
+  return ctx.problems.length ? 1 : 0;
 }
 
 main().then(

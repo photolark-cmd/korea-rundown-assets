@@ -2,16 +2,32 @@
 <meta name="google" content="notranslate">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+KR:wght@400;500;700;800;900&display=swap');
+  /* Layout is driven by these so one template serves every output format.
+     Defaults = the 1200x630 wide format; render-thumbnails.mjs overrides
+     them per profile (see tools/profiles.json). */
+  :root {
+    --w:1200px; --h:630px;
+    --pad-x:64px; --pad-top:56px; --pad-bottom:48px;
+    --glow:1100px 620px;
+    --grid:78px;
+    --series-size:13px;
+    --figure-size:150px;
+    --kicker-size:37px;
+    --kicker-max:960px;
+    --brand-size:16px;
+    --sub-size:14px;
+    --stack-mb:0;          /* auto centres the block vertically (square) */
+  }
   * { margin:0; padding:0; box-sizing:border-box; }
   html { background:#0E2A33; }
   body {
-    width:1200px; height:630px; overflow:hidden;
+    width:var(--w); height:var(--h); overflow:hidden;
     background:
-      radial-gradient(1100px 620px at 78% 12%, rgba(46,140,158,.42) 0%, rgba(46,140,158,0) 62%),
+      radial-gradient(var(--glow) at 78% 12%, rgba(46,140,158,.42) 0%, rgba(46,140,158,0) 62%),
       linear-gradient(148deg, #0E2A33 0%, #113B47 52%, #0C222A 100%);
     font-family:'Inter','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     color:#F4F1EA;
-    padding:56px 64px 48px;
+    padding:var(--pad-top) var(--pad-x) var(--pad-bottom);
     display:flex; flex-direction:column;
     position:relative;
   }
@@ -21,7 +37,7 @@
     background-image:
       linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px);
-    background-size:78px 78px;
+    background-size:var(--grid) var(--grid);
     mask-image:linear-gradient(115deg, transparent 40%, #000 100%);
     -webkit-mask-image:linear-gradient(115deg, transparent 40%, #000 100%);
   }
@@ -29,16 +45,16 @@
 
   .series {
     display:flex; align-items:center; gap:13px;
-    font-size:13px; font-weight:700; letter-spacing:.17em; text-transform:uppercase;
+    font-size:var(--series-size); font-weight:700; letter-spacing:.17em; text-transform:uppercase;
     color:#7FC3D4;
   }
   .rule { width:40px; height:2px; background:#D9A441; flex:none; }
   .part { color:#D9A441; }
 
-  .stack { margin-top:auto; }
+  .stack { margin-top:auto; margin-bottom:var(--stack-mb); }
 
   .figure {
-    font-size:150px; font-weight:900; letter-spacing:-.045em; line-height:.92;
+    font-size:var(--figure-size); font-weight:900; letter-spacing:-.045em; line-height:.92;
     color:#FFFFFF;
     white-space:nowrap;
   }
@@ -46,8 +62,8 @@
 
   .kicker {
     margin-top:20px;
-    font-size:37px; font-weight:800; letter-spacing:-.022em; line-height:1.22;
-    color:#F4F1EA; max-width:960px;
+    font-size:var(--kicker-size); font-weight:800; letter-spacing:-.022em; line-height:1.22;
+    color:#F4F1EA; max-width:var(--kicker-max);
     /* keep-all breaks Korean at word boundaries, not mid-word;
        anywhere is the escape hatch for a single unbreakable string */
     word-break:keep-all; overflow-wrap:anywhere;
@@ -59,8 +75,8 @@
     border-top:1px solid rgba(244,241,234,.17);
     display:flex; justify-content:space-between; align-items:center;
   }
-  .brand { font-size:16px; font-weight:900; letter-spacing:.13em; color:#F4F1EA; }
-  .sub { font-size:14px; font-weight:600; color:#8FB6C1; letter-spacing:.02em; }
+  .brand { font-size:var(--brand-size); font-weight:900; letter-spacing:.13em; color:#F4F1EA; }
+  .sub { font-size:var(--sub-size); font-weight:600; color:#8FB6C1; letter-spacing:.02em; }
 </style>
 
 <div class="grid"></div>
