@@ -26,7 +26,8 @@ node tools/render-thumbnails.mjs --list-profiles
 
 `us`는 OG 미리보기 규격, `kr`은 네이버 목록·검색의 정사각 대표이미지에 맞춘
 크기입니다. 정의는 [`profiles.json`](profiles.json)에 있고, 크기·여백·기본 문구를
-바꾸려면 그 파일만 고치면 됩니다.
+바꾸려면 그 파일만 고치면 됩니다. **네이버 블로그 주소(`sub`)는 자리표시자
+(`blog.naver.com/아이디`)이니 실제 주소로 바꿔 주세요.**
 
 ## 실행
 
@@ -74,7 +75,7 @@ node tools/render-thumbnails.mjs --profile us,kr --dry-run
 |---|---|---|
 | `series` | `Why Korea Is So Convenient` | `한국이 편한 이유` |
 | `brand` | `KOREA RUNDOWN` | `코리아 런다운` |
-| `sub` | `korearundown.blogspot.com` | `blog.naver.com/photolark` |
+| `sub` | `korearundown.blogspot.com` | `blog.naver.com/아이디` ← 수정 필요 |
 
 ### 카피 표기법
 
