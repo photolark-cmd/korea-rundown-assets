@@ -32,7 +32,13 @@ Korea Rundown 두 블로그의 **콘텐츠 자산과 이미지 생성 도구**. 
 - `meta.json`: `title` · `labels` · `search_description` · `youtube_url` · `uploaded`
 - **예약 발행 기능 없음.** 호출되는 즉시 올라간다. 시각 지정은 외부 스케줄러 또는 Blogger 예약 기능이 담당
 
-**이 저장소의 `drafts/*.md`는 마크다운이라 파이프라인이 바로 먹지 못한다.** 발행하려면 위 형식으로 변환이 필요하다.
+**이 저장소의 `drafts/*.md`는 마크다운이라 파이프라인이 바로 먹지 못한다.**
+`node tools/build-post.mjs drafts/<파일>.md` 로 변환하면 `blog/posts/<slug>/`에
+`post.html` + `meta.json`이 생성된다. 그 폴더를 `autoworker-script`의
+`channels/<채널>/blog/posts/` 아래로 옮기면 업로더가 인식한다.
+
+이미지는 이 저장소가 public이라 **raw.githubusercontent.com 주소로 호스팅**된다.
+변환 전에 이미지를 먼저 푸시할 것.
 
 ## 자동화 현황
 

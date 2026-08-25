@@ -6,6 +6,7 @@ CSV 한 줄 = PNG 한 장. 도구는 두 개입니다.
 |---|---|---|
 | `render-thumbnails.mjs` | **글 대표 썸네일** (시장별 규격) | `_template.html` |
 | `render-figures.mjs` | **본문용 차트·숫자 카드** | `figure-template.html` |
+| `build-post.mjs` | **초고 → 발행 형식 변환** (`post.html` + `meta.json`) | — |
 
 디자인은 전부 템플릿에 있고, 스크립트는 값을 채워 넣고 크기를 맞춘 뒤 캡처만 합니다.
 아래 **폰트** 절은 두 도구에 공통으로 적용됩니다.
@@ -230,3 +231,38 @@ node tools/render-thumbnails.mjs --profile us,kr --font-css tools/fonts/local.cs
 지금 스크립트로 다시 그리면 숫자 위치가 10px 남짓 달라집니다(디자인은 동일).
 새로 뽑는 썸네일끼리는 당연히 일관되며, 기존 4장까지 통일하고 싶으면
 `node tools/render-thumbnails.mjs`를 한 번 돌려 전부 덮어쓰면 됩니다.
+
+---
+
+## 초고를 발행 형식으로 (`build-post.mjs`)
+
+`drafts/*.md`는 마크다운이라 `autoworker-script` 파이프라인이 바로 못 먹습니다.
+이 도구가 **`post.html` + `meta.json`** 으로 바꿔줍니다.
+
+```bash
+node tools/build-post.mjs drafts/2026-08-25-seoul-lunch-prices.md --labels "Food,Prices,Seoul"
+```
+
+`blog/posts/<slug>/`에 생성됩니다. 그 폴더를 `autoworker-script`의
+`channels/<채널>/blog/posts/` 아래로 옮기면 업로더가 인식합니다.
+
+| 옵션 | 설명 |
+|---|---|
+| `--labels <a,b>` | Blogger 라벨 |
+| `--description <text>` | 검색 설명 (기본: 첫 문단 앞부분) |
+| `--slug <name>` | 폴더 이름 (기본: 파일명에서 날짜 제거) |
+| `--out <dir>` | 출력 위치 (기본: `blog/posts`) |
+
+**자동으로 처리되는 것**
+
+- 초고 맨 위 **한국어 경고 블록**과 맨 아래 **발행 체크리스트**는 제거됩니다 (작성자용 메모라서)
+- `# 제목`은 본문에서 빠지고 `meta.json`의 `title`로 갑니다
+- 표·인용·목록에 인라인 style이 붙습니다 (Blogger가 `<style>` 태그를 지웁니다)
+- 이미지는 **raw.githubusercontent.com 주소로 바뀝니다.** 이 저장소가 public이라 그대로 호스팅됩니다.
+  따라서 **이미지를 먼저 푸시한 뒤** 변환해야 합니다
+
+**수동으로 해야 하는 것**
+
+- 아직 발행 안 된 글끼리의 **내부 링크는 링크가 아니라 굵은 글씨로 렌더**됩니다.
+  URL이 없으니까요. 변환 시 목록으로 알려주니, 발행 후 `post.html`에서 `<a>`로 바꾸세요
+- `meta.json`의 `search_description`은 첫 문단을 자른 것이라 다듬는 편이 낫습니다
