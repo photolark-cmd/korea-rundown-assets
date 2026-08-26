@@ -92,13 +92,17 @@ node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형�
 - **다음 세션은 사용자에게 CSV를 요구하지 말 것.** `refs/`를 직접 읽으면 된다
 - 최근 영상은 조회수가 덜 쌓여서 배수가 낮게 잡힌다. 최근 창이 얇으면 `--recent-ratio`로
   그 창의 문턱만 낮춘다 — 100배 기준 자체를 건드리지 말 것
-- **클라우드 세션의 차단은 환경 설정 문제다.** 2026-08-26 세션 확인: `www.youtube.com`·
-  `www.googleapis.com` 모두 egress 프록시가 403 (curl·WebFetch 둘 다). 환경 "기본값"의
-  네트워크 접근이 **Trusted**라서 그렇다. 해제 방법(문서 확인함):
-  claude.ai/code 입력창 위 **구름 아이콘** → 환경에 마우스 올리면 나오는 **톱니** →
-  Network access를 **Custom**으로 → Allowed domains에 `www.googleapis.com` +
-  "Also include default list of common package managers" 체크 → 같은 창의
-  Environment variables에 `YOUTUBE_API_KEY=...`. **설정 페이지 URL은 없다**
+- **네트워크 차단은 풀렸다 (2026-08-27 06:21 KST 확인).** `www.googleapis.com`은 이제
+  프록시 터널을 통과한다(`200 Connection Established`). 수집에 필요한 호스트는 이것
+  하나뿐이다 — 코드에 보이는 `www.youtube.com`은 CSV·마크다운에 적히는 링크 문자열일 뿐
+  네트워크 호출이 아니다(그래서 아직 막혀 있어도 무방하다). **Network access 설정은 이제
+  건드리지 말 것.**
+- **막혀 있는 건 `YOUTUBE_API_KEY` 하나다.** 1·2·3차 시도 모두 환경변수 미주입으로 실패했다
+  (403 `reason: forbidden` = 키가 요청에 안 실림). 설정 위치: claude.ai/code 입력창 위
+  **구름 아이콘** → 환경 `기본값`(`env_01ApTTBGFHba6yRJzEhDn3mh`, 계정에 환경은 이것 하나뿐)에
+  마우스 올리면 나오는 **톱니** → 같은 창 아래쪽 **Environment variables**.
+  **설정 페이지 URL은 없다.** 자세한 진단은 [`refs/RUN-STATUS.md`](refs/RUN-STATUS.md)
+- 환경변수가 계속 안 먹으면 `--key AIza…`로 직접 넘겨도 동일하게 돈다(키가 대화 로그에 남음)
 - 그 설정이 되어 있으면 세션에서 직접 수집한다. 안 되어 있으면 사용자 PC 몫이다.
   야간 루틴(`trig_01PoRtjWkv5XenL2HZLWJgU3`)이 매일 07:00 KST에 둘 다 시도한다
 - 환경변수는 비밀 저장소가 아니다(문서 경고). 키는 Google Cloud에서
