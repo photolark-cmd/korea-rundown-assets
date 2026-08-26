@@ -394,3 +394,47 @@ node tools/collect-refs.mjs --channel @핸들 --since 2025-01-01
   스프레드시트에서 다시 정렬할 때 쓰세요
 
 날짜를 좁힐 때 `--since`가 최근 창보다 뒤면 검색이 겹치므로 한 번만 돕니다.
+
+---
+
+## 밤에 알아서 돌리기 (`refs-nightly.mjs`)
+
+**수집 → 다이제스트 → 커밋 → 푸시를 한 번에 합니다.** 결과가 저장소에 올라가므로,
+다음 세션에서 CSV를 붙여넣을 필요 없이 클로드가 `refs/`를 바로 읽습니다.
+
+```bash
+node tools/refs-nightly.mjs                    # 전체 한 번
+node tools/refs-nightly.mjs --no-push          # 커밋만
+node tools/refs-nightly.mjs -- --recent-ratio 30   # -- 뒤는 collect-refs로 전달
+```
+
+윈도우 작업 스케줄러 등록 — **키 넣고 한 줄, 두 번만 실행하면 끝입니다:**
+
+```bat
+setx YOUTUBE_API_KEY "발급받은키"
+schtasks /create /tn "korea-refs" /tr "C:\...\korea-rundown-assets\tools\refs-nightly.cmd" /sc daily /st 05:00
+```
+
+- 새 결과가 없으면 커밋하지 않습니다. 빈 커밋으로 로그가 지저분해지지 않습니다
+- 커밋 메시지에 채택 편수와 최근 창 편수가 들어갑니다 (`refs: 2026-08-26 - 12 kept, 4 recent`)
+- 실패하면 종료 코드가 0이 아니라 스케줄러 기록에 남습니다
+
+### 다이제스트 (`analyze-refs.mjs`)
+
+`refs-nightly`가 자동으로 부르지만, 따로 돌릴 수도 있습니다.
+
+```bash
+node tools/analyze-refs.mjs                    # 가장 최근 refs-*.csv
+node tools/analyze-refs.mjs refs/refs-2026-08-26.csv --top 20
+```
+
+`refs/digest-<날짜>.md`에 이런 것들이 정리됩니다.
+
+- **최근 창 상위** — 중앙 배수와 최고 배수 포함
+- **두 번 이상 터진 채널** — 우연이 아니라 포맷인 쪽. `--channel @핸들`로 파고들 대상
+- **길이 구간별 중앙 배수** — 어느 길이가 실제로 터지는지
+- **제목이 쓰는 수** — 충격·소름 / 실화 / 왜 / 최상급 / 만약 / 정체 / 크기 숫자 / 물음표 빈도
+- **반복되는 소재어** — 제목에 두 번 이상 나온 단어. 다음 회차 시드 조정용
+
+소재어 추출은 조사·어미를 떼는 정도의 단순한 방식입니다. 경향을 보는 용도지
+정밀한 형태소 분석이 아닙니다.

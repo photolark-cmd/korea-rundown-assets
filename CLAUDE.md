@@ -85,9 +85,11 @@ node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형�
 
 - **레퍼런스 채택 기준은 사용자가 정했다: 조회수 ≥ 구독자 × 100.** 그 아래는 모으지 않는다
 - **최근 30일이 최우선이다** (사용자가 정함). 도구가 그 창을 따로 검색해서 맨 위에 놓는다
-- `node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000`
-- 결과는 `refs/refs-<날짜>.csv` + `.md` (최근 30일 먼저, 그 안에서 배수 내림차순).
-  사용법: [`tools/README.md`](tools/README.md)
+- `node tools/refs-nightly.mjs` 하나면 수집 → 다이제스트 → 커밋 → 푸시까지 끝난다.
+  PC 작업 스케줄러에 `tools/refs-nightly.cmd`를 걸어 두는 것이 정상 운영 형태다
+- 결과는 `refs/refs-<날짜>.csv` + `.md` (최근 30일 먼저, 그 안에서 배수 내림차순),
+  그리고 `refs/digest-<날짜>.md` (채널·길이·제목 훅 요약). 사용법: [`tools/README.md`](tools/README.md)
+- **다음 세션은 사용자에게 CSV를 요구하지 말 것.** `refs/`를 직접 읽으면 된다
 - 최근 영상은 조회수가 덜 쌓여서 배수가 낮게 잡힌다. 최근 창이 얇으면 `--recent-ratio`로
   그 창의 문턱만 낮춘다 — 100배 기준 자체를 건드리지 말 것
 - **클라우드 세션에서는 수집이 불가능하다.** 2026-08-26 세션에서 확인한 범위:
