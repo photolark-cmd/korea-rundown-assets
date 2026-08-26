@@ -35,6 +35,18 @@
 미확인 생물체
 거대 생물 전설
 
-# 여기서부터 채널 — 위 결과에서 반복해서 올라오는 채널을 옮겨 적으세요.
-# 채널이 정해지면 검색어 줄을 줄이고 @핸들로 돌리는 편이 쿼터가 훨씬 쌉니다.
-# @example-handle
+# 채널 — 웹 검색으로 모은 후보 (2026-08-26). 근거·제외 목록: refs/candidate-channels.md
+# 핸들이 확인되지 않아 못 찾는 줄이 있을 수 있습니다. 그런 줄은 경고만 남고 넘어갑니다.
+# 채널 훑기는 6유닛 남짓이라 검색어 한 줄(300유닛)보다 훨씬 쌉니다.
+
+https://www.youtube.com/@Jabsik_dinosaur
+https://www.youtube.com/channel/UCVKvxjaxcKgFm7BEUw__2gg
+https://www.youtube.com/channel/UCYEokR7TzrZnrIefPM_nZnw
+https://www.youtube.com/@%EC%9A%B0%EB%A7%88UMA
+https://www.youtube.com/@TV%EC%83%9D%EB%AC%BC%EB%8F%84%EA%B0%90
+https://www.youtube.com/@kodaiseibutuch
+
+# 아래는 일부러 꺼둔 것들 — 구독자가 많아 100배를 구조적으로 못 넘습니다.
+# https://www.youtube.com/@Unrealscience
+# https://www.youtube.com/@kbsanimalkingdom
+# https://www.youtube.com/@SBSANIMAL

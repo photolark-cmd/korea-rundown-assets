@@ -137,7 +137,10 @@ async function api(endpoint, params, cost = 1) {
   quota += cost;
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(`${endpoint} ${res.status}: ${body?.error?.message ?? res.statusText}`);
+    const err = new Error(`${endpoint} ${res.status}: ${body?.error?.message ?? res.statusText}`);
+    // The caller tells a dead handle apart from a spent quota by this.
+    err.reason = body?.error?.errors?.[0]?.reason;
+    throw err;
   }
   return body;
 }
@@ -392,22 +395,39 @@ async function main() {
   // same question - skip the second one rather than spend 100 units on it.
   const needRecentPass = opts.recent &&
     opts.recentAfter > (opts.since ? `${opts.since}T00:00:00Z` : '');
+
+  // A seed list carries handles nobody has verified, and a renamed channel
+  // would otherwise throw away every result collected before it. One dead seed
+  // costs a warning, not the run. A spent quota does end the sweep - but the
+  // rows already in hand still get written.
+  let spent = false;
+  const sweep = async (label, collect) => {
+    if (spent) return;
+    try {
+      const found = await collect();
+      console.log(`  ${label} - ${found.length} videos`);
+      ids.push(...found);
+    } catch (err) {
+      if (err.reason === 'quotaExceeded') {
+        spent = true;
+        console.warn(`  ! quota spent - stopping the sweep, keeping what came back`);
+      } else {
+        console.warn(`  ! ${label} - ${err.message}`);
+      }
+    }
+  };
+
   for (const query of opts.queries) {
     if (needRecentPass) {
-      const fresh = await searchVideos(query, opts, { pages: opts.recentPages, after: opts.recentAfter });
-      console.log(`  last ${String(opts.recent).padEnd(3)}d   ${query} - ${fresh.length} videos`);
-      ids.push(...fresh);
+      await sweep(`last ${String(opts.recent).padEnd(3)}d   ${query}`,
+        () => searchVideos(query, opts, { pages: opts.recentPages, after: opts.recentAfter }));
     }
-    const found = await searchVideos(query, opts);
-    console.log(`  search      ${query} - ${found.length} videos`);
-    ids.push(...found);
+    await sweep(`search      ${query}`, () => searchVideos(query, opts));
   }
   for (const ref of opts.channels) {
-    const channelId = await resolveChannel(ref, opts);
-    const found = await channelUploads(channelId, opts);
-    console.log(`  channel     ${ref} - ${found.length} uploads`);
-    ids.push(...found);
+    await sweep(`channel     ${ref}`, async () => channelUploads(await resolveChannel(ref, opts), opts));
   }
+  if (!ids.length) throw new Error('nothing came back - every search and channel failed');
 
   const videos = await fetchVideos(ids, opts);
   const channels = await fetchChannels(videos.map((v) => v.snippet.channelId), opts);
