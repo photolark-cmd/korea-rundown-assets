@@ -92,9 +92,17 @@ node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형�
 - **다음 세션은 사용자에게 CSV를 요구하지 말 것.** `refs/`를 직접 읽으면 된다
 - 최근 영상은 조회수가 덜 쌓여서 배수가 낮게 잡힌다. 최근 창이 얇으면 `--recent-ratio`로
   그 창의 문턱만 낮춘다 — 100배 기준 자체를 건드리지 말 것
-- **클라우드 세션에서는 수집이 불가능하다.** 2026-08-26 세션에서 확인한 범위:
-  `www.youtube.com`·`www.googleapis.com` 모두 egress 프록시가 403으로 막는다
-  (curl·WebFetch 둘 다). **도구를 돌리는 건 사용자 PC 몫이다**
+- **클라우드 세션의 차단은 환경 설정 문제다.** 2026-08-26 세션 확인: `www.youtube.com`·
+  `www.googleapis.com` 모두 egress 프록시가 403 (curl·WebFetch 둘 다). 환경 "기본값"의
+  네트워크 접근이 **Trusted**라서 그렇다. 해제 방법(문서 확인함):
+  claude.ai/code 입력창 위 **구름 아이콘** → 환경에 마우스 올리면 나오는 **톱니** →
+  Network access를 **Custom**으로 → Allowed domains에 `www.googleapis.com` +
+  "Also include default list of common package managers" 체크 → 같은 창의
+  Environment variables에 `YOUTUBE_API_KEY=...`. **설정 페이지 URL은 없다**
+- 그 설정이 되어 있으면 세션에서 직접 수집한다. 안 되어 있으면 사용자 PC 몫이다.
+  야간 루틴(`trig_01PoRtjWkv5XenL2HZLWJgU3`)이 매일 07:00 KST에 둘 다 시도한다
+- 환경변수는 비밀 저장소가 아니다(문서 경고). 키는 Google Cloud에서
+  YouTube Data API 전용으로 제한해 두는 편이 안전하다
 - 배수는 API가 주는 반올림된 현재 구독자 수 기준이라 근사치다. 단정해서 쓰지 말 것
 
 ## 지켜야 할 것
