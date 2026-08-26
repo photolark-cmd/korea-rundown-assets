@@ -26,8 +26,12 @@ const HELP = `Collect reference videos whose views beat their channel's subscrib
   --channel <id|@handle|url>
                        sweep one channel's uploads - repeatable
   --ratio <n>          keep views / subscribers >= n            (default: 100)
+  --recent <days>      the priority window: these sort first and get their
+                       own search pass. 0 turns it off           (default: 30)
+  --recent-ratio <n>   bar inside that window          (default: same --ratio)
   --since <YYYY-MM-DD> ignore anything published before this date
   --pages <n>          search result pages per query, 50 each   (default: 2)
+  --recent-pages <n>   pages for the recent-window pass          (default: 1)
   --uploads <n>        newest uploads to read per channel       (default: 200)
   --min-subs <n>       floor on subscribers - drops 200-sub channels that
                        clear 100x on one fluke                   (default: 0)
@@ -41,17 +45,24 @@ const HELP = `Collect reference videos whose views beat their channel's subscrib
   --dry-run            print the plan and the quota it would cost
   -h, --help           this message
 
+Recency: a search ordered by view count is dominated by years-old hits, so the
+last 30 days get a second search pass of their own with a date bound. Views
+also need time to pile up, which means a 3-day-old video clears a lower ratio
+than an old one at the same trajectory - if the recent section comes back thin,
+--recent-ratio is the knob.
+
 Quota: a search page costs 100 units, every other call costs 1, and the free
-daily allowance is 10,000 - so roughly 90 search pages a day. Channel sweeps
-are nearly free; prefer them once you know whose work you are studying.
+daily allowance is 10,000. With the defaults a query costs 300 - two general
+pages plus one recent page - so about 30 queries a day. Channel sweeps are
+nearly free; prefer them once you know whose work you are studying.
 `;
 
 /* ---------------------------------------------------------------- options */
 
 function parseArgs(argv) {
   const opts = {
-    queries: [], channels: [], ratio: 100, pages: 2, uploads: 200,
-    minSubs: 0, minViews: 0, region: 'KR', lang: 'ko', out: 'refs',
+    queries: [], channels: [], ratio: 100, recent: 30, pages: 2, recentPages: 1,
+    uploads: 200, minSubs: 0, minViews: 0, region: 'KR', lang: 'ko', out: 'refs',
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -65,8 +76,11 @@ function parseArgs(argv) {
       case '--query': opts.queries.push(value()); break;
       case '--channel': opts.channels.push(value()); break;
       case '--ratio': opts.ratio = Number(value()); break;
+      case '--recent': opts.recent = Number(value()); break;
+      case '--recent-ratio': opts.recentRatio = Number(value()); break;
       case '--since': opts.since = value(); break;
       case '--pages': opts.pages = Number(value()); break;
+      case '--recent-pages': opts.recentPages = Number(value()); break;
       case '--uploads': opts.uploads = Number(value()); break;
       case '--min-subs': opts.minSubs = Number(value()); break;
       case '--min-views': opts.minViews = Number(value()); break;
@@ -83,9 +97,18 @@ function parseArgs(argv) {
   }
   if (opts.seeds) readSeeds(opts.seeds, opts);
   if (!(opts.ratio > 0)) throw new Error('--ratio must be a positive number');
+  if (!Number.isInteger(opts.recent) || opts.recent < 0) throw new Error('--recent must be 0 or more days');
+  if (opts.recentRatio !== undefined && !(opts.recentRatio > 0)) throw new Error('--recent-ratio must be a positive number');
   if (!Number.isInteger(opts.pages) || opts.pages < 1) throw new Error('--pages must be 1 or more');
+  if (!Number.isInteger(opts.recentPages) || opts.recentPages < 1) throw new Error('--recent-pages must be 1 or more');
   if (!Number.isInteger(opts.uploads) || opts.uploads < 1) throw new Error('--uploads must be 1 or more');
   if (opts.since && !/^\d{4}-\d{2}-\d{2}$/.test(opts.since)) throw new Error('--since wants YYYY-MM-DD');
+  opts.recentRatio ??= opts.ratio;
+  // The window boundary is fixed once, so every row is measured against the
+  // same instant even if the sweep runs for a while.
+  opts.recentAfter = opts.recent
+    ? new Date(Date.now() - opts.recent * 86400000).toISOString()
+    : undefined;
   opts.name ||= `refs-${new Date().toISOString().slice(0, 10)}`;
   return opts;
 }
@@ -119,15 +142,23 @@ async function api(endpoint, params, cost = 1) {
   return body;
 }
 
-/** Search pages for one query, newest-first by views so the outliers surface early. */
-async function searchVideos(query, opts) {
+/**
+ * Search pages for one query, ordered by view count.
+ *
+ * `after` bounds the pass by publish date. Ordering by views without a bound
+ * returns the all-time hits for the term, which is why the recent window needs
+ * a pass of its own rather than a filter over these results.
+ */
+async function searchVideos(query, opts, { pages, after } = {}) {
   const ids = [];
   let pageToken;
-  for (let page = 0; page < opts.pages; page++) {
+  const publishedAfter = [after, opts.since && `${opts.since}T00:00:00Z`]
+    .filter(Boolean).sort().pop();
+  for (let page = 0; page < (pages ?? opts.pages); page++) {
     const body = await api('search', {
       key: opts.key, part: 'id', type: 'video', q: query, maxResults: 50,
       order: 'viewCount', regionCode: opts.region, relevanceLanguage: opts.lang,
-      publishedAfter: opts.since ? `${opts.since}T00:00:00Z` : undefined,
+      publishedAfter,
       pageToken,
     }, 100);
     for (const item of body.items ?? []) if (item.id?.videoId) ids.push(item.id.videoId);
@@ -211,6 +242,10 @@ function durationSeconds(iso) {
 function keepers(videos, channels, opts) {
   const rows = [];
   const skipped = { hiddenSubs: 0, belowRatio: 0, floors: 0, shorts: 0 };
+  // Videos in the recent window that missed the bar but are within reach of it:
+  // views are still accumulating there, so these are worth a second look.
+  const building = [];
+  const now = Date.now();
   for (const video of videos) {
     const channel = channels.get(video.snippet?.channelId);
     // A channel that hides its count reports subscriberCount as 0 or omits it;
@@ -223,24 +258,34 @@ function keepers(videos, channels, opts) {
     if (opts.noShorts && seconds > 0 && seconds <= 60) { skipped.shorts++; continue; }
     if (subs < opts.minSubs || views < opts.minViews) { skipped.floors++; continue; }
     const ratio = views / subs;
-    if (ratio < opts.ratio) { skipped.belowRatio++; continue; }
+    const publishedAt = video.snippet.publishedAt;
+    const recent = Boolean(opts.recentAfter) && publishedAt >= opts.recentAfter;
+    const bar = recent ? opts.recentRatio : opts.ratio;
+    if (ratio < bar) {
+      skipped.belowRatio++;
+      if (recent && ratio >= bar / 4) building.push(ratio);
+      continue;
+    }
     rows.push({
-      ratio, views, subs, seconds,
-      published: video.snippet.publishedAt.slice(0, 10),
+      ratio, views, subs, seconds, recent,
+      ageDays: Math.max(0, Math.floor((now - Date.parse(publishedAt)) / 86400000)),
+      published: publishedAt.slice(0, 10),
       title: video.snippet.title,
       channelTitle: channel.snippet.title,
       channelId: channel.id,
       videoId: video.id,
     });
   }
-  rows.sort((a, b) => b.ratio - a.ratio);
-  return { rows, skipped };
+  // The recent window sits on top; ratio orders within each block.
+  rows.sort((a, b) => Number(b.recent) - Number(a.recent) || b.ratio - a.ratio);
+  return { rows, skipped, building };
 }
 
 /* ----------------------------------------------------------------- output */
 
 const num = (n) => n.toLocaleString('en-US');
 const ratioText = (r) => (r >= 10 ? `${Math.round(r)}x` : `${r.toFixed(1)}x`);
+const ratioKo = (r) => ratioText(r).replace('x', '배');
 
 function clock(seconds) {
   if (!seconds) return '';
@@ -253,11 +298,13 @@ function clock(seconds) {
 const cell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 function writeCsv(file, rows) {
-  const header = ['ratio', 'views', 'subs', 'published', 'duration', 'channel', 'title', 'url', 'channel_url'];
+  const header = ['window', 'ratio', 'views', 'subs', 'published', 'age_days',
+    'duration', 'channel', 'title', 'url', 'channel_url'];
   const lines = [header.join(',')];
   for (const r of rows) {
     lines.push([
-      r.ratio.toFixed(1), r.views, r.subs, r.published, clock(r.seconds),
+      r.recent ? 'recent' : 'older',
+      r.ratio.toFixed(1), r.views, r.subs, r.published, r.ageDays, clock(r.seconds),
       r.channelTitle, r.title,
       `https://www.youtube.com/watch?v=${r.videoId}`,
       `https://www.youtube.com/channel/${r.channelId}`,
@@ -266,8 +313,21 @@ function writeCsv(file, rows) {
   fs.writeFileSync(file, `${lines.join('\n')}\n`);
 }
 
+const TABLE_HEAD = [
+  '| 배수 | 조회수 | 구독자 | 공개일 | 지난날 | 길이 | 채널 | 제목 |',
+  '|---:|---:|---:|---|---:|---:|---|---|',
+];
+
+const tableRows = (rows) => rows.map((r) => `| ${[
+  ratioText(r.ratio), num(r.views), num(r.subs), r.published, `${r.ageDays}일`, clock(r.seconds),
+  r.channelTitle.replace(/\|/g, '\\|'),
+  `[${r.title.replace(/\|/g, '\\|')}](https://www.youtube.com/watch?v=${r.videoId})`,
+].join(' | ')} |`);
+
 function writeMarkdown(file, rows, opts) {
-  const head = [
+  const recent = rows.filter((r) => r.recent);
+  const older = rows.filter((r) => !r.recent);
+  const out = [
     `# 레퍼런스 — 구독자 대비 조회수 ${opts.ratio}배 이상`,
     '',
     `수집일 ${new Date().toISOString().slice(0, 10)} · ${rows.length}편` +
@@ -276,15 +336,24 @@ function writeMarkdown(file, rows, opts) {
     '> 구독자 수는 API가 유효숫자 3자리로 반올림해 주고, 배수는 **오늘의 구독자 수**',
     '> 기준입니다. 채널이 그 뒤로 컸다면 실제 터진 배수는 이보다 큽니다.',
     '',
-    '| 배수 | 조회수 | 구독자 | 공개일 | 길이 | 채널 | 제목 |',
-    '|---:|---:|---:|---|---:|---|---|',
   ];
-  const body = rows.map((r) => [
-    ratioText(r.ratio), num(r.views), num(r.subs), r.published, clock(r.seconds),
-    r.channelTitle.replace(/\|/g, '\\|'),
-    `[${r.title.replace(/\|/g, '\\|')}](https://www.youtube.com/watch?v=${r.videoId})`,
-  ].join(' | ')).map((line) => `| ${line} |`);
-  fs.writeFileSync(file, `${[...head, ...body].join('\n')}\n`);
+  if (opts.recent) {
+    out.push(
+      `## 최근 ${opts.recent}일 — ${recent.length}편`,
+      '',
+      '> 조회수는 시간이 지나야 쌓입니다. **여기 배수는 아직 덜 자란 값이고**,',
+      `> 사흘 된 영상의 ${ratioKo(opts.recentRatio)}는 2년 된 영상의 같은 숫자보다 훨씬 셉니다.` +
+        (opts.recentRatio === opts.ratio ? ' 얇게 나오면 `--recent-ratio`로 문턱을 낮추세요.' : ''),
+      '',
+      ...(recent.length ? [...TABLE_HEAD, ...tableRows(recent)]
+        : [`_${opts.recent}일 안에 ${ratioKo(opts.recentRatio)}를 넘긴 영상이 없습니다._`]),
+      '',
+      `## 그 이전 — ${older.length}편`,
+      '',
+    );
+  }
+  out.push(...(older.length || !opts.recent ? [...TABLE_HEAD, ...tableRows(older)] : ['_없음._']));
+  fs.writeFileSync(file, `${out.join('\n')}\n`);
 }
 
 /* ------------------------------------------------------------------- main */
@@ -299,7 +368,8 @@ async function main() {
   }
 
   if (opts.dryRun) {
-    const searchCost = opts.queries.length * opts.pages * 100;
+    const pagesPerQuery = opts.pages + (opts.recent ? opts.recentPages : 0);
+    const searchCost = opts.queries.length * pagesPerQuery * 100;
     const sweepCost = opts.channels.length * (2 + Math.ceil(opts.uploads / 50));
     console.log(`  queries     ${opts.queries.length ? opts.queries.join(' · ') : 'none'}`);
     console.log(`  channels    ${opts.channels.length ? opts.channels.join(' · ') : 'none'}`);
@@ -307,6 +377,9 @@ async function main() {
       (opts.minSubs ? `, subs >= ${num(opts.minSubs)}` : '') +
       (opts.minViews ? `, views >= ${num(opts.minViews)}` : '') +
       (opts.noShorts ? ', no shorts' : ''));
+    console.log(`  priority    ${opts.recent
+      ? `last ${opts.recent} days, own search pass, kept at ${opts.recentRatio}x`
+      : 'off - one flat list by ratio'}`);
     console.log(`  quota       ~${num(searchCost + sweepCost)} units of the 10,000 daily`);
     return;
   }
@@ -315,7 +388,16 @@ async function main() {
   if (!opts.key) throw new Error('no API key - set YOUTUBE_API_KEY or pass --key');
 
   const ids = [];
+  // When --since already starts inside the window, both passes would ask the
+  // same question - skip the second one rather than spend 100 units on it.
+  const needRecentPass = opts.recent &&
+    opts.recentAfter > (opts.since ? `${opts.since}T00:00:00Z` : '');
   for (const query of opts.queries) {
+    if (needRecentPass) {
+      const fresh = await searchVideos(query, opts, { pages: opts.recentPages, after: opts.recentAfter });
+      console.log(`  last ${String(opts.recent).padEnd(3)}d   ${query} - ${fresh.length} videos`);
+      ids.push(...fresh);
+    }
     const found = await searchVideos(query, opts);
     console.log(`  search      ${query} - ${found.length} videos`);
     ids.push(...found);
@@ -329,7 +411,7 @@ async function main() {
 
   const videos = await fetchVideos(ids, opts);
   const channels = await fetchChannels(videos.map((v) => v.snippet.channelId), opts);
-  const { rows, skipped } = keepers(videos, channels, opts);
+  const { rows, skipped, building } = keepers(videos, channels, opts);
 
   fs.mkdirSync(opts.out, { recursive: true });
   const csvPath = path.join(opts.out, `${opts.name}.csv`);
@@ -337,8 +419,15 @@ async function main() {
   writeCsv(csvPath, rows);
   writeMarkdown(mdPath, rows, opts);
 
+  const recentKept = rows.filter((r) => r.recent).length;
   console.log(`  looked at   ${num(videos.length)} videos on ${num(channels.size)} channels`);
-  console.log(`  kept        ${num(rows.length)} at ${opts.ratio}x or better`);
+  console.log(`  kept        ${num(rows.length)} at ${opts.ratio}x or better` +
+    (opts.recent ? `, ${num(recentKept)} of them from the last ${opts.recent} days` : ''));
+  if (building.length) {
+    console.log(`  building    ${num(building.length)} more inside the window sit between ` +
+      `${ratioText(opts.recentRatio / 4)} and ${ratioText(opts.recentRatio)} - views are still ` +
+      `piling up there (best ${ratioText(Math.max(...building))}); --recent-ratio lowers the bar`);
+  }
   console.log(`  dropped     ${num(skipped.belowRatio)} under the bar` +
     (skipped.floors ? `, ${num(skipped.floors)} under the floors` : '') +
     (skipped.shorts ? `, ${num(skipped.shorts)} shorts` : '') +

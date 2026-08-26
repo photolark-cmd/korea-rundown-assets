@@ -83,8 +83,12 @@ node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형�
 블로그 두 개 말고 **유튜브 사이언스 썰 채널**도 운영한다.
 
 - **레퍼런스 채택 기준은 사용자가 정했다: 조회수 ≥ 구독자 × 100.** 그 아래는 모으지 않는다
+- **최근 30일이 최우선이다** (사용자가 정함). 도구가 그 창을 따로 검색해서 맨 위에 놓는다
 - `node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000`
-- 결과는 `refs/refs-<날짜>.csv` + `.md` (배수 내림차순). 사용법: [`tools/README.md`](tools/README.md)
+- 결과는 `refs/refs-<날짜>.csv` + `.md` (최근 30일 먼저, 그 안에서 배수 내림차순).
+  사용법: [`tools/README.md`](tools/README.md)
+- 최근 영상은 조회수가 덜 쌓여서 배수가 낮게 잡힌다. 최근 창이 얇으면 `--recent-ratio`로
+  그 창의 문턱만 낮춘다 — 100배 기준 자체를 건드리지 말 것
 - **클라우드 세션에서는 수집이 불가능하다.** 2026-08-26 세션에서 확인한 범위:
   `www.youtube.com`·`www.googleapis.com` 모두 egress 프록시가 403으로 막는다
   (curl·WebFetch 둘 다). **도구를 돌리는 건 사용자 PC 몫이다**
