@@ -142,11 +142,14 @@ function drawFigure(job) {
   set('brand', brand, true);
 
   // Defined here because this function is serialised into the page.
+  // The 1.2 and 1.5 steps matter: without them a max of 10,320 rounds the axis
+  // up to 20,000 and the columns are squashed into the bottom half of the plot.
   const niceMax = (v) => {
     if (v <= 0) return 1;
     const e = 10 ** Math.floor(Math.log10(v));
     const m = v / e;
-    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e;
+    return (m <= 1 ? 1 : m <= 1.2 ? 1.2 : m <= 1.5 ? 1.5
+          : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e;
   };
   const withCommas = (n) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
