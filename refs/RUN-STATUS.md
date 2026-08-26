@@ -1,8 +1,8 @@
-# 레퍼런스 수집 실행 상태
+# 레퍼런스 수집 실행 상태 (2차 시도)
 
-- **실행 시각**: 2026-08-27 03:43 KST (2026-08-26 18:43 UTC)
+- **실행 시각**: 2026-08-27 06:03 KST (2026-08-26 21:03 UTC)
 - **브랜치**: `claude/science-reference-depth-j47fg4`
-- **결론**: 수집 **실행 못 함**. 원인은 프록시 차단이 아니라 **`YOUTUBE_API_KEY` 환경변수가 세션에 아예 없음**.
+- **결론**: 이번에도 수집 **실행 못 함**. `YOUTUBE_API_KEY`가 **여전히 이 세션 환경에 없음**. 1차 시도와 동일한 원인이며, 네트워크·프록시는 정상이다.
 
 ---
 
@@ -15,18 +15,18 @@ $ echo "KEY:${YOUTUBE_API_KEY:+set}${YOUTUBE_API_KEY:-missing}"
 KEY:missing
 ```
 
-### 1-2. googleapis.com 도달 여부
+### 1-2. API 호출 상태코드
 
 ```
-$ curl -sS -o /dev/null -w "googleapis:%{http_code}\n" https://www.googleapis.com/youtube/v3/videos --max-time 20; echo "curl_exit:$?"
-googleapis:403
+$ curl -sS -o /tmp/yt.json -w "%{http_code}\n" \
+    "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=$YOUTUBE_API_KEY"
+403
 curl_exit:0
 ```
 
-### 1-3. 실제 API 호출
+### 1-3. 403 응답 본문
 
-```
-$ curl -sS "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=$YOUTUBE_API_KEY" --max-time 20 | head -20
+```json
 {
   "error": {
     "code": 403,
@@ -43,69 +43,32 @@ $ curl -sS "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&
 }
 ```
 
+**`reason` = `forbidden`** — 지시받은 판정표대로면 "키가 요청에 아예 안 실림"이다. `accessNotConfigured`(API 미활성화)도, `ipRefererBlocked`(키 제한)도, `quotaExceeded`(쿼터 소진)도 아니다. `$YOUTUBE_API_KEY`가 빈 문자열이라 `key=` 뒤가 비어서 나갔다.
+
+`curl_exit:0`이므로 연결·응답 수신은 정상 — 프록시 문제가 아니라는 1차 시도의 결론이 그대로 유지된다.
+
 ---
 
-## 2. 403의 정체 — 프록시 아님, 키 문제임
+## 2. 이번 시도에서 새로 확인된 것
 
-지시받은 두 갈래 판정 기준대로 확인했고, **키 문제 쪽으로 확정**된다. 근거 세 가지:
+**이 세션 컨테이너는 2026-08-26 21:00:47 UTC(06:00 KST)에 새로 뜬 것이고, 그 시점 환경변수 목록에 `YOUTUBE_API_KEY`가 없다.** 즉 컨테이너가 오래돼서 설정을 못 받은 게 아니라, **이 환경의 환경변수 목록에 키가 저장되어 있지 않다.**
 
-**(가) curl 종료코드가 0이다.** 프록시 차단이면 `CONNECT tunnel failed` + 종료코드 56이 나야 한다. 실제로는 `curl_exit:0`, 즉 연결·응답 수신 모두 정상이다.
+- 이 세션이 쓰는 환경 ID: **`env_01ApTTBGFHba6yRJzEhDn3mh`** (kind: `anthropic_cloud`)
+- 컨테이너에 주입된 환경변수 133개를 이름 기준으로 확인했으나 `YOUTUBE_API_KEY` 없음
+- 저장소 안에도 `.env` 등 대체 경로 없음 (저장소 루트에 dotfile은 `.gitignore`뿐)
 
-**(나) 응답 헤더를 보면 CONNECT 터널이 정상 수립됐고, 403은 구글 서버가 직접 돌려준 것이다.**
+가능성은 둘 중 하나다:
 
-```
-$ curl -sS -D- -o /dev/null "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=$YOUTUBE_API_KEY" --max-time 20 | head -15
-HTTP/1.1 200 Connection Established      <-- 프록시 터널 수립 성공
+1. 설정 저장이 실제로 반영되지 않았다 (저장 버튼/입력 확정 누락 등)
+2. **키를 다른 환경에 넣었다** — 계정에 환경이 여러 개면, 이 세션이 쓰는 `env_01ApTTBGFHba6yRJzEhDn3mh`가 아닌 쪽에 들어갔을 수 있다
 
-HTTP/2 403                                <-- 그 다음 구글이 직접 준 403
-vary: X-Origin
-vary: Referer
-vary: Origin,Accept-Encoding
-content-type: application/json; charset=UTF-8
-date: Wed, 26 Aug 2026 18:42:32 GMT
-server: scaffolding on HTTPServer2         <-- 구글 프론트엔드 서버 시그니처
-x-xss-protection: 0
-x-frame-options: SAMEORIGIN
-x-content-type-options: nosniff
-accept-ranges: none
-```
-
-`HTTP/1.1 200 Connection Established`는 프록시가 터널을 열어줬다는 뜻이다. 그 뒤의 403은 구글 본체(`server: scaffolding on HTTPServer2`)에서 온 정상 API 에러 응답이다.
-
-**(다) 에이전트 프록시 상태에 차단 기록이 없다.**
-
-```
-$ curl -sS "$HTTPS_PROXY/__agentproxy/status" --max-time 20
-{
-  "enabled": true,
-  "port": 40265,
-  ...
-  "selective": false,
-  "toolScoped": false,
-  "recentRelayFailures": []      <-- 최근 릴레이 실패 0건
-}
-```
-
-**즉 `www.googleapis.com` 도메인은 뚫려 있다.** 403 메시지도 "키가 제한됐다"(`ipRefererBlocked` / `API not enabled`)가 아니라 **`Method doesn't allow unregistered callers`** — 호출에 키가 아예 안 실렸다는 뜻이다. `$YOUTUBE_API_KEY`가 빈 문자열이라 `key=` 뒤가 비어서 나간 결과다.
-
-컨테이너 전체를 뒤져도 키가 없다:
-
-```
-$ env | grep -cE "AIza"
-0
-$ find /home /root /mnt -maxdepth 4 -name ".env*" -o -maxdepth 4 -name "*.env"
-(출력 없음)
-$ ls -la .env*
-ls: cannot access '.env*': No such file or directory
-```
-
-`tools/collect-refs.mjs`는 키를 `process.env.YOUTUBE_API_KEY` 또는 `--key` 인자에서만 읽는다(387~388행). 대체 경로 없음.
+`tools/collect-refs.mjs`는 키를 `process.env.YOUTUBE_API_KEY` 또는 `--key` 인자에서만 읽는다(387~388행). 우회 경로는 없다.
 
 ---
 
 ## 3. 수집 실행 결과
 
-**채택 편수 0, 최근 30일 편수 0, 소모 쿼터 0 유닛.** 쿼터는 한 유닛도 쓰지 않았다 — `quotaExceeded`가 아니라 API를 아예 호출하지 못하고 스크립트 진입 단계에서 종료됐다.
+**채택 편수 0, 최근 30일 편수 0, 소모 쿼터 0 유닛.** API를 한 번도 호출하지 못하고 스크립트 진입 단계에서 종료됐으므로 쿼터는 그대로 남아 있다. (`--recent-ratio 30` 재실행 단계까지 가지 못했다.)
 
 ```
 $ node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000
@@ -123,22 +86,37 @@ exit:1
 
 ## 4. 사용자가 고쳐야 할 것 (한 줄)
 
-**claude.ai/code 환경 설정에서 이 환경의 환경변수에 `YOUTUBE_API_KEY`(Google Cloud 콘솔에서 발급하고 YouTube Data API v3를 활성화한 키)를 추가한 뒤 세션을 다시 실행하면 된다** — 네트워크·프록시는 손댈 필요 없다.
+**claude.ai/code → 환경 설정에서 이 세션이 쓰는 환경(`env_01ApTTBGFHba6yRJzEhDn3mh`)의 환경변수에 `YOUTUBE_API_KEY`가 실제로 저장돼 있는지 확인하고(다른 환경에 넣었을 가능성 포함) 저장한 뒤 새 세션을 띄우면 된다** — 네트워크·프록시는 손댈 필요 없다.
 
-### 참고: 설정 후 재확인 방법
+### 설정 후 재확인 방법
 
-키를 넣고 나서 아래가 `200`이면 바로 수집이 돌아간다.
+새 세션에서 아래 한 줄이 `set`으로 나오는지 먼저 보는 게 가장 빠르다.
+
+```
+echo "KEY:${YOUTUBE_API_KEY:+set}${YOUTUBE_API_KEY:-missing}"
+```
+
+`set`이면 그다음 이게 `200`이어야 수집이 돈다.
 
 ```
 curl -sS -o /dev/null -w "%{http_code}\n" \
   "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=$YOUTUBE_API_KEY"
 ```
 
-여전히 403이면 이번 건과 원인이 다르며, 응답 본문의 `reason` 필드로 갈린다:
+`set`인데도 403이면 원인이 이번 건과 다르며, 응답 본문의 `reason`으로 갈린다:
 
 | `reason` | 의미 | 조치 |
 |---|---|---|
-| `forbidden` (이번 실행) | 키가 요청에 안 실림 | 환경변수 설정 |
+| `forbidden` (1·2차 실행) | 키가 요청에 안 실림 | 환경변수 설정 |
 | `accessNotConfigured` | 프로젝트에 YouTube Data API v3 미활성화 | GCP 콘솔에서 API 사용 설정 |
 | `ipRefererBlocked` | 키에 IP/리퍼러 제한 걸림 | 키 제한 해제 또는 API 제한만 남기기 |
 | `quotaExceeded` | 일일 쿼터 소진 (기본 10,000유닛) | 다음 날 재시도 또는 쿼터 증설 |
+
+### 임시 대안
+
+환경변수 설정이 계속 안 먹으면, 세션에서 아래처럼 키를 직접 넘겨도 동일하게 돈다 (키가 대화 로그에 남는 점은 감수해야 한다).
+
+```
+node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000 --key <발급받은키>
+node tools/analyze-refs.mjs
+```
