@@ -380,8 +380,15 @@ async function main() {
     throw new Error('nothing to collect - pass --seeds, --query, or --channel');
   }
 
+  // When --since already starts inside the window, both passes would ask the
+  // same question - skip the second one rather than spend 100 units on it.
+  const needRecentPass = Boolean(opts.recent) &&
+    opts.recentAfter > (opts.since ? `${opts.since}T00:00:00Z` : '');
+
   if (opts.dryRun) {
-    const pagesPerQuery = opts.pages + (opts.recent ? opts.recentPages : 0);
+    // Quote the same skip the sweep will make, or the estimate reads 100 units
+    // per query too high and a budget check made against it is meaningless.
+    const pagesPerQuery = opts.pages + (needRecentPass ? opts.recentPages : 0);
     const searchCost = opts.queries.length * pagesPerQuery * 100;
     const sweepCost = opts.channels.length * (2 + Math.ceil(opts.uploads / 50));
     console.log(`  queries     ${opts.queries.length ? opts.queries.join(' · ') : 'none'}`);
@@ -392,7 +399,9 @@ async function main() {
       (opts.noShorts ? ', no shorts' : '') +
       (opts.exclude.length ? `, excluding ${opts.exclude.length} pattern(s)` : ''));
     console.log(`  priority    ${opts.recent
-      ? `last ${opts.recent} days, own search pass, kept at ${opts.recentRatio}x`
+      ? `last ${opts.recent} days, kept at ${opts.recentRatio}x` +
+        (needRecentPass ? ', own search pass'
+          : ', no second pass - --since already starts inside the window')
       : 'off - one flat list by ratio'}`);
     console.log(`  quota       ~${num(searchCost + sweepCost)} units of the 10,000 daily`);
     return;
@@ -402,11 +411,6 @@ async function main() {
   if (!opts.key) throw new Error('no API key - set YOUTUBE_API_KEY or pass --key');
 
   const ids = [];
-  // When --since already starts inside the window, both passes would ask the
-  // same question - skip the second one rather than spend 100 units on it.
-  const needRecentPass = opts.recent &&
-    opts.recentAfter > (opts.since ? `${opts.since}T00:00:00Z` : '');
-
   // A seed list carries handles nobody has verified, and a renamed channel
   // would otherwise throw away every result collected before it. One dead seed
   // costs a warning, not the run. A spent quota does end the sweep - but the
