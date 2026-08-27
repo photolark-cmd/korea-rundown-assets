@@ -358,9 +358,26 @@ node tools/collect-refs.mjs --channel @핸들 --since 2025-01-01
 | `--min-subs <n>` | `0` | 구독자 하한 |
 | `--min-views <n>` | `0` | 조회수 하한 |
 | `--no-shorts` | — | 60초 이하 제외 |
+| `--exclude <패턴>` | — | 제목·채널명이 이 정규식에 걸리면 제외. 여러 번 가능 |
 | `--region` / `--lang` | `KR` / `ko` | 검색 지역·언어 |
 | `--out` / `--name` | `refs` / `refs-<오늘>` | 저장 위치·파일명 |
 | `--dry-run` | — | 호출 없이 계획과 예상 쿼터만 출력 |
+
+### 배수만으로는 소재가 안 걸러집니다
+
+**100배 기준은 "얼마나 퍼졌나"만 봅니다. 무엇에 대한 영상인지는 안 봅니다.**
+2026-08-27 첫 수집에서 채택 22편 중 절반 가까이가 **유아용 만화·동요·게임 실황**이었습니다.
+공룡 키즈 채널과 게임 스트리머가 이 기준을 아주 쉽게 넘습니다.
+
+```bash
+node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000 \
+  --exclude "키즈|kids|kidz|어린이|동요|만화|cartoon|toy|장난감" \
+  --exclude "게임|gameplay|로블록스|roblox|마인크래프트|minecraft|서브노티카|subnautica" \
+  --exclude "- Topic"
+```
+
+`- Topic`은 유튜브가 자동 생성하는 음원 채널입니다. 실행 끝에 몇 편이 이 패턴으로
+빠졌는지 찍히니, 너무 많이 빠지면 패턴을 좁히세요.
 
 ### 숫자를 읽을 때 주의할 것
 

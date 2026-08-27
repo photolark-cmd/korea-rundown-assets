@@ -37,6 +37,9 @@ const HELP = `Collect reference videos whose views beat their channel's subscrib
                        clear 100x on one fluke                   (default: 0)
   --min-views <n>      floor on views                            (default: 0)
   --no-shorts          drop anything 60 seconds or under
+  --exclude <pattern>  drop titles or channels matching this (case-insensitive
+                       regex) - repeatable. The ratio rule says nothing about
+                       subject, so kids' cartoons and gameplay clear it easily
   --region <cc>        search region                            (default: KR)
   --lang <code>        search relevance language                (default: ko)
   --out <dir>          where the CSV and Markdown land          (default: refs)
@@ -63,6 +66,7 @@ function parseArgs(argv) {
   const opts = {
     queries: [], channels: [], ratio: 100, recent: 30, pages: 2, recentPages: 1,
     uploads: 200, minSubs: 0, minViews: 0, region: 'KR', lang: 'ko', out: 'refs',
+    exclude: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -85,6 +89,7 @@ function parseArgs(argv) {
       case '--min-subs': opts.minSubs = Number(value()); break;
       case '--min-views': opts.minViews = Number(value()); break;
       case '--no-shorts': opts.noShorts = true; break;
+      case '--exclude': opts.exclude.push(value()); break;
       case '--region': opts.region = value(); break;
       case '--lang': opts.lang = value(); break;
       case '--out': opts.out = value(); break;
@@ -103,6 +108,9 @@ function parseArgs(argv) {
   if (!Number.isInteger(opts.recentPages) || opts.recentPages < 1) throw new Error('--recent-pages must be 1 or more');
   if (!Number.isInteger(opts.uploads) || opts.uploads < 1) throw new Error('--uploads must be 1 or more');
   if (opts.since && !/^\d{4}-\d{2}-\d{2}$/.test(opts.since)) throw new Error('--since wants YYYY-MM-DD');
+  opts.excludeRe = opts.exclude.map((p) => {
+    try { return new RegExp(p, 'i'); } catch { throw new Error(`--exclude is not a valid regex: ${p}`); }
+  });
   opts.recentRatio ??= opts.ratio;
   // The window boundary is fixed once, so every row is measured against the
   // same instant even if the sweep runs for a while.
@@ -244,7 +252,7 @@ function durationSeconds(iso) {
 
 function keepers(videos, channels, opts) {
   const rows = [];
-  const skipped = { hiddenSubs: 0, belowRatio: 0, floors: 0, shorts: 0 };
+  const skipped = { hiddenSubs: 0, belowRatio: 0, floors: 0, shorts: 0, excluded: 0 };
   // Videos in the recent window that missed the bar but are within reach of it:
   // views are still accumulating there, so these are worth a second look.
   const building = [];
@@ -257,6 +265,8 @@ function keepers(videos, channels, opts) {
     const subs = Number(channel.statistics?.subscriberCount ?? 0);
     const views = Number(video.statistics?.viewCount ?? 0);
     if (!subs) { skipped.hiddenSubs++; continue; }
+    const subject = `${video.snippet.title} ${channel.snippet.title}`;
+    if (opts.excludeRe.some((re) => re.test(subject))) { skipped.excluded++; continue; }
     const seconds = durationSeconds(video.contentDetails?.duration);
     if (opts.noShorts && seconds > 0 && seconds <= 60) { skipped.shorts++; continue; }
     if (subs < opts.minSubs || views < opts.minViews) { skipped.floors++; continue; }
@@ -379,7 +389,8 @@ async function main() {
     console.log(`  keep        views >= subs x ${opts.ratio}` +
       (opts.minSubs ? `, subs >= ${num(opts.minSubs)}` : '') +
       (opts.minViews ? `, views >= ${num(opts.minViews)}` : '') +
-      (opts.noShorts ? ', no shorts' : ''));
+      (opts.noShorts ? ', no shorts' : '') +
+      (opts.exclude.length ? `, excluding ${opts.exclude.length} pattern(s)` : ''));
     console.log(`  priority    ${opts.recent
       ? `last ${opts.recent} days, own search pass, kept at ${opts.recentRatio}x`
       : 'off - one flat list by ratio'}`);
@@ -451,6 +462,7 @@ async function main() {
   console.log(`  dropped     ${num(skipped.belowRatio)} under the bar` +
     (skipped.floors ? `, ${num(skipped.floors)} under the floors` : '') +
     (skipped.shorts ? `, ${num(skipped.shorts)} shorts` : '') +
+    (skipped.excluded ? `, ${num(skipped.excluded)} excluded by pattern` : '') +
     (skipped.hiddenSubs ? `, ${num(skipped.hiddenSubs)} with hidden subscriber counts` : ''));
   console.log(`  wrote       ${csvPath}`);
   console.log(`              ${mdPath}`);
