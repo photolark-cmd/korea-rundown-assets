@@ -97,13 +97,21 @@ node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형�
   하나뿐이다 — 코드에 보이는 `www.youtube.com`은 CSV·마크다운에 적히는 링크 문자열일 뿐
   네트워크 호출이 아니다(그래서 아직 막혀 있어도 무방하다). **Network access 설정은 이제
   건드리지 말 것.**
-- **막혀 있는 건 `YOUTUBE_API_KEY` 하나다.** 1~4차 시도 모두 환경변수 미주입으로 실패했다
-  (403 `reason: forbidden` = 키가 요청에 안 실림). 설정 위치: claude.ai/code 입력창 위
-  **구름 아이콘** → 환경 `기본값`(`env_01ApTTBGFHba6yRJzEhDn3mh`, 계정에 환경은 이것 하나뿐)에
-  마우스 올리면 나오는 **톱니** → 같은 창 아래쪽 **Environment variables**.
-  **설정 페이지 URL은 없다.** 자세한 진단은 [`refs/RUN-STATUS.md`](refs/RUN-STATUS.md)
-- **네 번 연속 실패했으므로 이제는 `--key <발급받은_키>`로 직접 넘기는 쪽을 먼저 시도한다**
-  (동일하게 돈다. 키가 대화 로그에 남으니 수집 후 GCP에서 폐기·재발급하면 된다)
+- **막혀 있는 건 `YOUTUBE_API_KEY` 하나다. 단, 5차에서 원인이 바뀌었다.**
+  1~4차는 환경변수 **미주입**이었다(403 `reason: forbidden` = 키가 요청에 안 실림).
+  **5차(2026-08-27 09:05 KST)에는 변수가 도착했다** — `${YOUTUBE_API_KEY:+set}`가 `set`이다.
+  대신 **값이 키가 아니라 안내 문구**였다: 구글 키 접두사 6글자 뒤에 `로시작하는실제키`라는
+  한글이 붙은 14글자. 구글이 `400 API key not valid`로 자른다(쿼터 0유닛 소모).
+  **즉 전달 경로는 뚫렸고, 남은 건 값 교체 하나다.**
+- 설정 위치: claude.ai/code 입력창 위 **구름 아이콘** → 환경 `기본값`
+  (`env_01ApTTBGFHba6yRJzEhDn3mh`, 계정에 환경은 이것 하나뿐)에 마우스 올리면 나오는 **톱니** →
+  같은 창 아래쪽 **Environment variables**. **설정 페이지 URL은 없다.**
+  자세한 진단은 [`refs/RUN-STATUS.md`](refs/RUN-STATUS.md)
+- **유효한 키는 39글자이고 `A–Z a–z 0–9 _ -`만 쓴다.** 한글이 섞였거나 길이가 다르면 그건 키가 아니다.
+  새 세션에서 이 한 줄로 먼저 확인하고 수집에 들어갈 것:
+  `python3 -c "import os,re;k=os.environ.get('YOUTUBE_API_KEY','');print('ok' if re.fullmatch(r'[A-Za-z0-9_-]{39}',k) else 'still wrong: %d chars' % len(k))"`
+- 환경변수 값이 계속 틀리면 `--key <발급받은_키>`로 직접 넘겨도 동일하게 돈다
+  (키가 대화 로그에 남으니 수집 후 GCP에서 폐기·재발급하면 된다)
 - **커밋되는 파일에 키 문자열을 쓰지 말 것.** 구글 키 접두사는 문서에 예시로도 적지 않는다 —
   커밋 직전 점검이 그 문자열 검색으로 하기 때문에 예시가 있으면 점검이 무의미해진다
 - 그 설정이 되어 있으면 세션에서 직접 수집한다. 안 되어 있으면 사용자 PC 몫이다.
