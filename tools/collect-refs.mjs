@@ -37,6 +37,11 @@ const HELP = `Collect reference videos whose views beat their channel's subscrib
                        clear 100x on one fluke                   (default: 0)
   --min-views <n>      floor on views                            (default: 0)
   --no-shorts          drop anything 60 seconds or under
+  --min-duration <sec> drop anything shorter than this. 61-second vertical
+                       animation clears --no-shorts; 180 keeps narration only
+  --max-per-channel <n>
+                       keep at most n rows per channel, best first, so one
+                       prolific channel cannot fill the table
   --exclude <pattern>  drop titles or channels matching this (case-insensitive
                        regex) - repeatable. The ratio rule says nothing about
                        subject, so kids' cartoons and gameplay clear it easily
@@ -89,6 +94,8 @@ function parseArgs(argv) {
       case '--min-subs': opts.minSubs = Number(value()); break;
       case '--min-views': opts.minViews = Number(value()); break;
       case '--no-shorts': opts.noShorts = true; break;
+      case '--min-duration': opts.minDuration = Number(value()); break;
+      case '--max-per-channel': opts.maxPerChannel = Number(value()); break;
       case '--exclude': opts.exclude.push(value()); break;
       case '--region': opts.region = value(); break;
       case '--lang': opts.lang = value(); break;
@@ -108,6 +115,12 @@ function parseArgs(argv) {
   if (!Number.isInteger(opts.recentPages) || opts.recentPages < 1) throw new Error('--recent-pages must be 1 or more');
   if (!Number.isInteger(opts.uploads) || opts.uploads < 1) throw new Error('--uploads must be 1 or more');
   if (opts.since && !/^\d{4}-\d{2}-\d{2}$/.test(opts.since)) throw new Error('--since wants YYYY-MM-DD');
+  if (opts.minDuration !== undefined && (!Number.isInteger(opts.minDuration) || opts.minDuration < 1)) {
+    throw new Error('--min-duration must be a whole number of seconds, 1 or more');
+  }
+  if (opts.maxPerChannel !== undefined && (!Number.isInteger(opts.maxPerChannel) || opts.maxPerChannel < 1)) {
+    throw new Error('--max-per-channel must be 1 or more');
+  }
   opts.excludeRe = opts.exclude.map((p) => {
     try { return new RegExp(p, 'i'); } catch { throw new Error(`--exclude is not a valid regex: ${p}`); }
   });
@@ -252,7 +265,7 @@ function durationSeconds(iso) {
 
 function keepers(videos, channels, opts) {
   const rows = [];
-  const skipped = { hiddenSubs: 0, belowRatio: 0, floors: 0, shorts: 0, excluded: 0 };
+  const skipped = { hiddenSubs: 0, belowRatio: 0, floors: 0, shorts: 0, excluded: 0, capped: 0 };
   // Videos in the recent window that missed the bar but are within reach of it:
   // views are still accumulating there, so these are worth a second look.
   const building = [];
@@ -268,7 +281,8 @@ function keepers(videos, channels, opts) {
     const subject = `${video.snippet.title} ${channel.snippet.title}`;
     if (opts.excludeRe.some((re) => re.test(subject))) { skipped.excluded++; continue; }
     const seconds = durationSeconds(video.contentDetails?.duration);
-    if (opts.noShorts && seconds > 0 && seconds <= 60) { skipped.shorts++; continue; }
+    const floor = Math.max(opts.noShorts ? 61 : 0, opts.minDuration ?? 0);
+    if (floor && seconds > 0 && seconds < floor) { skipped.shorts++; continue; }
     if (subs < opts.minSubs || views < opts.minViews) { skipped.floors++; continue; }
     const ratio = views / subs;
     const publishedAt = video.snippet.publishedAt;
@@ -291,6 +305,19 @@ function keepers(videos, channels, opts) {
   }
   // The recent window sits on top; ratio orders within each block.
   rows.sort((a, b) => Number(b.recent) - Number(a.recent) || b.ratio - a.ratio);
+
+  // Capping runs after the sort, so what survives per channel is its best -
+  // and its recent rows before its older ones.
+  if (opts.maxPerChannel) {
+    const seen = new Map();
+    const capped = rows.filter((r) => {
+      const n = (seen.get(r.channelId) ?? 0) + 1;
+      seen.set(r.channelId, n);
+      return n <= opts.maxPerChannel;
+    });
+    skipped.capped = rows.length - capped.length;
+    return { rows: capped, skipped, building };
+  }
   return { rows, skipped, building };
 }
 
@@ -396,7 +423,8 @@ async function main() {
     console.log(`  keep        views >= subs x ${opts.ratio}` +
       (opts.minSubs ? `, subs >= ${num(opts.minSubs)}` : '') +
       (opts.minViews ? `, views >= ${num(opts.minViews)}` : '') +
-      (opts.noShorts ? ', no shorts' : '') +
+      (opts.noShorts || opts.minDuration ? `, ${Math.max(opts.noShorts ? 61 : 0, opts.minDuration ?? 0)}s or longer` : '') +
+      (opts.maxPerChannel ? `, max ${opts.maxPerChannel}/channel` : '') +
       (opts.exclude.length ? `, excluding ${opts.exclude.length} pattern(s)` : ''));
     console.log(`  priority    ${opts.recent
       ? `last ${opts.recent} days, kept at ${opts.recentRatio}x` +
@@ -467,6 +495,7 @@ async function main() {
     (skipped.floors ? `, ${num(skipped.floors)} under the floors` : '') +
     (skipped.shorts ? `, ${num(skipped.shorts)} shorts` : '') +
     (skipped.excluded ? `, ${num(skipped.excluded)} excluded by pattern` : '') +
+    (skipped.capped ? `, ${num(skipped.capped)} over the per-channel cap` : '') +
     (skipped.hiddenSubs ? `, ${num(skipped.hiddenSubs)} with hidden subscriber counts` : ''));
   console.log(`  wrote       ${csvPath}`);
   console.log(`              ${mdPath}`);

@@ -25,7 +25,10 @@ const HELP = `Collect references, write the digest, commit and push.
   --seeds <file>   seed list      (default: refs/seed-queries.txt)
   -h, --help       this message
 
-Defaults passed to collect-refs.mjs: --no-shorts --min-subs 1000.
+Defaults passed to collect-refs.mjs: --no-shorts --min-subs 1000, a 180-second
+duration floor, a 2-per-channel cap, and the subject exclusions that the
+2026-08-27 round showed were needed. Anything after -- is appended, so a later
+flag of the same name wins.
 Needs YOUTUBE_API_KEY in the environment.
 `;
 
@@ -49,6 +52,24 @@ function parseArgs(argv) {
   if (!opts.seeds) throw new Error('--seeds needs a value');
   return opts;
 }
+
+/**
+ * What the 2026-08-27 collection taught us about the ratio rule.
+ *
+ * views >= subs x 100 measures reach and nothing else, so a dinosaur cartoon
+ * channel, a gameplay stream, and a Hindi folk tale all clear it. These are the
+ * filters that survived that round; the 100x rule itself stays untouched.
+ */
+const SUBJECT_FILTERS = [
+  '--min-duration', '180',      // 61-second vertical animation clears --no-shorts
+  '--max-per-channel', '2',     // one 7k-subscriber channel took 38% of a table
+  '--exclude', '키즈|kids|kidz|어린이|동요|만화|cartoon|toy|장난감',
+  '--exclude', '게임|gameplay|로블록스|roblox|마인크래프트|minecraft|서브노티카|subnautica|붉은사막',
+  '--exclude', '- Topic',
+  '--exclude', '[ऀ-ॿ]|hindi|kahani|cerita|dongeng|satwa|nonton',
+  '--exclude', '국뽕|대한민국의 위엄|레전드 대한민국|한국인만|외국인 반응',
+  '--exclude', '낚시|fishing|손맛|조황',
+];
 
 /* ------------------------------------------------------------------ steps */
 
@@ -101,7 +122,7 @@ function main() {
   }
 
   run('node', ['tools/collect-refs.mjs', '--seeds', opts.seeds,
-    '--no-shorts', '--min-subs', '1000', ...opts.passthrough]);
+    '--no-shorts', '--min-subs', '1000', ...SUBJECT_FILTERS, ...opts.passthrough]);
 
   const csv = newestCsv();
   run('node', ['tools/analyze-refs.mjs', csv]);
