@@ -6,7 +6,12 @@
     "width": 1200,
     "height": 630,
     "vars": {},
-    "type": { "figureMax": 150, "figureMin": 56, "kickerMax": 37, "kickerMin": 22 },
+    "type": {
+      "figureMax": 150,
+      "figureMin": 56,
+      "kickerMax": 37,
+      "kickerMin": 22
+    },
     "defaults": {
       "series": "Why Korea Is So Convenient",
       "brand": "KOREA RUNDOWN",
@@ -33,11 +38,48 @@
       "--sub-size": "15px",
       "--stack-mb": "auto"
     },
-    "type": { "figureMax": 150, "figureMin": 56, "kickerMax": 44, "kickerMin": 26 },
+    "type": {
+      "figureMax": 150,
+      "figureMin": 56,
+      "kickerMax": 44,
+      "kickerMin": 26
+    },
     "defaults": {
       "series": "한국이 편한 이유",
       "brand": "코리아 런다운",
       "sub": "blog.naver.com/clark315"
+    }
+  },
+  "us-square": {
+    "label": "영문 블로그 목록 썸네일 · 1200×1200 정사각 (블로거가 목록에서 정사각으로 잘라서 필요)",
+    "csv": "thumbnails.us.csv",
+    "out": "square",
+    "width": 1200,
+    "height": 1200,
+    "vars": {
+      "--pad-x": "76px",
+      "--pad-top": "68px",
+      "--pad-bottom": "64px",
+      "--glow": "1000px 1000px",
+      "--grid": "90px",
+      "--series-size": "15px",
+      "--figure-size": "150px",
+      "--kicker-size": "44px",
+      "--kicker-max": "1030px",
+      "--brand-size": "17px",
+      "--sub-size": "15px",
+      "--stack-mb": "auto"
+    },
+    "type": {
+      "figureMax": 150,
+      "figureMin": 56,
+      "kickerMax": 44,
+      "kickerMin": 26
+    },
+    "defaults": {
+      "series": "Why Korea Is So Convenient",
+      "brand": "KOREA RUNDOWN",
+      "sub": "korearundown.com"
     }
   }
 }
