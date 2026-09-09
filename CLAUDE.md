@@ -100,6 +100,8 @@ node tools/learn-preset.mjs <before-after 폴더> --name "이름"   # 보정 프
 
 ## 현재 상태
 
+- **사진 보정 프로그램 인계 메모: [`tools/retouch/HANDOFF.md`](tools/retouch/HANDOFF.md)** — PC 세션은 이것부터 읽는다
+
 - `drafts/` 초고 3편 (외식비 / 라면 가격 / 편의점 한 끼) — **전부 검증 전, 미발행**
 - 세 편은 상호 링크돼 있고 같은 조사에서 나왔다
 - 사진 미확보. 촬영 목록: [`docs/photo-shot-list.md`](docs/photo-shot-list.md) (야간 기준으로 작성됨)
