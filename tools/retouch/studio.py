@@ -1170,14 +1170,30 @@ class Session:
     # ---- chat
     def client(self):
         if self._client is None:
-            import anthropic
-            self._client = anthropic.Anthropic()
+            if self.backend() == 'cli':
+                import cli_backend
+                self._client = cli_backend.CliClient(
+                    self.args.data, model=self.args.model, effort=self.args.effort)
+            else:
+                import anthropic
+                self._client = anthropic.Anthropic()
         return self._client
+
+    def backend(self):
+        """'api' = ANTHROPIC_API_KEY 로 직접 호출, 'cli' = 설치된 Claude Code 로 우회."""
+        choice = getattr(self.args, 'backend', 'auto')
+        if choice != 'auto':
+            return choice
+        if os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('ANTHROPIC_AUTH_TOKEN'):
+            return 'api'
+        import cli_backend
+        return 'cli' if cli_backend.available() else 'api'
 
     def chat(self, text):
         if self.base is None:
             return '먼저 사진을 여세요.', []
         import anthropic
+        import cli_backend
         content = [{'type': 'text', 'text': f'[현재 상태] {self.state_text()}\n[현재 결과 미리보기]'},
                    image_block(self.render(), VIEW_MAX),
                    {'type': 'text', 'text': text}]
@@ -1214,9 +1230,13 @@ class Session:
             reply = '\n'.join(b.text for b in resp.content if b.type == 'text').strip()
             if resp.stop_reason == 'tool_use':
                 reply += '\n(도구 호출 한도에 도달해 여기서 멈췄습니다. 이어서 지시해 주세요.)'
+        except cli_backend.CliError as e:
+            self.messages.pop()
+            return f'Claude CLI 경로에서 막혔습니다: {e}', events
         except anthropic.AuthenticationError:
             self.messages.pop()
-            return 'API 키가 없거나 잘못됐습니다. 터미널에서 ANTHROPIC_API_KEY 를 설정하고 studio.py 를 다시 시작하세요.', events
+            return ('API 키가 없거나 잘못됐습니다. ANTHROPIC_API_KEY 를 설정하거나, '
+                    'Claude Code 가 깔려 있으면 --backend cli 로 다시 시작하세요.'), events
         except anthropic.APIConnectionError:
             self.messages.pop()
             return '네트워크 오류로 Claude에 연결하지 못했습니다.', events
@@ -1546,6 +1566,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'error': str(e)}, 500)
 
 
+def port_taken(port, host='127.0.0.1'):
+    """윈도의 ThreadingHTTPServer 는 allow_reuse_address 때문에 이미 점유된 포트에도
+    예외 없이 바인드된다. 그러면 요청이 먼저 붙은 프로그램으로 가는데 아무 신호도 없다.
+    그래서 바인드 결과가 아니라 '연결이 되는가'로 점유를 판정한다."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex((host, port)) == 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--folder', help='한 장씩 열 사진 폴더 (필름스트립에 나옴)')
@@ -1555,17 +1585,28 @@ def main():
     ap.add_argument('--device')
     ap.add_argument('--model', default=MODEL)
     ap.add_argument('--effort', default='medium', choices=['low', 'medium', 'high', 'xhigh', 'max'])
-    ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--backend', default='auto', choices=['auto', 'api', 'cli'],
+                    help='auto=키가 있으면 API, 없으면 설치된 Claude Code(claude -p)로 우회')
+    ap.add_argument('--port', type=int, default=8792)
     ap.add_argument('--no-browser', action='store_true')
     args = ap.parse_args()
+
+    if port_taken(args.port):
+        sys.exit(f'포트 {args.port} 는 이미 다른 프로그램이 쓰고 있습니다. --port 로 다른 번호를 주세요.\n'
+                 f'(윈도에서는 이 충돌이 오류 없이 통과해, 요청이 남의 서버로 가 버립니다.)')
 
     Handler.session = Session(args)
     Handler.html = open(os.path.join(C.HERE, 'studio.html'), encoding='utf-8').read()
     srv = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     url = f'http://127.0.0.1:{args.port}/'
     print(f'스튜디오: {url}   (Ctrl+C 로 종료)')
-    if not os.environ.get('ANTHROPIC_API_KEY') and not os.environ.get('ANTHROPIC_AUTH_TOKEN'):
-        print('참고: ANTHROPIC_API_KEY 가 없으면 대화창은 동작하지 않습니다 (ant auth login 프로필이 있으면 됩니다).')
+    backend = Handler.session.backend()
+    if backend == 'cli':
+        print('대화창: 설치된 Claude Code 로 돌립니다 (API 키 불필요). 한 턴 10~15초 걸리고 구독 사용량을 씁니다.')
+    elif os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('ANTHROPIC_AUTH_TOKEN'):
+        print('대화창: ANTHROPIC_API_KEY 로 직접 호출합니다.')
+    else:
+        print('대화창을 쓸 수 없습니다: ANTHROPIC_API_KEY 도 없고 claude 명령도 찾지 못했습니다.')
     if not args.no_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

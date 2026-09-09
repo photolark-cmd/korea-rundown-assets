@@ -10,11 +10,27 @@
 ## 준비 (최초 1회, PC)
 
 ```bash
-python -m pip install -r tools/retouch/requirements.txt
-# GPU 학습용 torch는 pytorch.org/get-started 에서 CUDA 빌드로 (예: --index-url https://download.pytorch.org/whl/cu126)
+cd tools/retouch
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+**설치 직후 반드시 확인합니다.** `torch` 는 이름만 적으면 CPU 판이 깔리는데, 설치도 임포트도
+학습도 다 성공하고 GPU 만 안 씁니다 — 오류로는 절대 안 나타납니다.
+
+```bash
+.venv\Scripts\python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+# 2.14.0+cu126 True  ← +cpu 나 False 면 위 CUDA 설치를 다시
 ```
 
 얼굴 랜드마크 모델(3.7MB)은 처음 실행할 때 `tools/retouch/models/`에 자동으로 내려받습니다.
+
+## 여는 법 (터미널 없이)
+
+`tools/retouch/보정스튜디오.cmd` 를 **더블클릭**합니다. 처음 한 번만 사진 폴더를 묻고
+그다음부터는 기억합니다. 폴더를 아이콘 위로 끌어다 놓아도 그 폴더로 엽니다.
+결과는 사진 폴더 안 `보정본/` 에 저장됩니다.
 
 ## 순서
 
@@ -64,12 +80,36 @@ python tools/retouch/retouch.py 촬영본/ --out 결과/ --data work/ [--preset 
 실행한 뒤 바뀐 결과를 다시 확인하고 보고합니다.
 
 ```bash
-set ANTHROPIC_API_KEY=sk-ant-...        # Windows (macOS/Linux: export ...)
-python tools/retouch/studio.py --folder 촬영본/ --out 결과/ --data work/
+.venv\Scripts\python studio.py --folder 촬영본/ --out 결과/ --data work/
 ```
 
-브라우저가 `http://127.0.0.1:8765/` 로 열립니다. 아래 필름스트립에서 사진을 고르거나 **사진 열기**로
-업로드합니다. 슬라이더로 직접 만질 수도 있고, 대화창에 이렇게 씁니다.
+브라우저가 `http://127.0.0.1:8792/` 로 열립니다. 아래 필름스트립에서 사진을 고르거나 **사진 열기**로
+업로드합니다.
+
+### 대화창은 두 가지 방식으로 돕니다 (`--backend auto|api|cli`)
+
+기본값 `auto` 는 `ANTHROPIC_API_KEY` 가 있으면 API 로 직접, 없으면 **설치된 Claude Code**
+(`claude -p`)로 우회합니다. 즉 **API 키가 없어도 대화창이 됩니다.**
+
+| | `api` | `cli` |
+|---|---|---|
+| 준비물 | API 키 + 결제수단 | Claude Code 설치만 |
+| 한 턴 | 5~8초 | 16~28초 |
+| 비용 | 실제 청구 (턴당 대략 $0.01~0.02) | 현금 청구 없음, 구독 사용량 (턴당 $0.035 상당) |
+
+`cli` 는 턴마다 Claude Code 자체 컨텍스트 약 70k 를 다시 읽고, 이건 못 줄입니다
+(`--bare` 로 걷어내면 OAuth 가 끊겨 오히려 API 키가 필요해집니다). **키가 있으면 `api` 가
+항상 낫습니다.** `cli` 는 키 없이 당장 쓰기 위한 길입니다.
+
+```bash
+set ANTHROPIC_API_KEY=sk-ant-...        # 키를 쓸 때만. Windows (macOS/Linux: export ...)
+```
+
+### 포트
+
+기본 포트는 **8792** 입니다. 이미 다른 프로그램이 쓰고 있으면 기동을 거부합니다 —
+윈도에서는 포트 충돌이 오류 없이 통과하고 요청만 남의 서버로 가 버리기 때문에,
+조용히 붙는 대신 죽는 쪽을 택했습니다. `--port` 로 바꿀 수 있습니다. 슬라이더로 직접 만질 수도 있고, 대화창에 이렇게 씁니다.
 
 | 지시 예 | Claude가 하는 일 |
 |---|---|

@@ -164,7 +164,11 @@ $('pick').addEventListener('change', async e => {
   setBusy(false);
 });
 $('send').addEventListener('click', send);
-$('text').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+// isComposing: 한글 IME 로 조합 중일 때의 Enter 는 글자를 확정하는 키다.
+// 이걸 거르지 않으면 마지막 음절이 확정되기 전에 전송돼 지시가 잘린다.
+$('text').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
+});
 $('auto').addEventListener('click', async () => { if (state.open) show(await api('/api/params', {auto: !state.auto})); });
 $('undo').addEventListener('click', async () => { if (state.open) show(await api('/api/undo')); });
 $('preset').addEventListener('change', async () => { if (state.open) show(await api('/api/params', {preset: $('preset').value})); });

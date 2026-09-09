@@ -53,18 +53,47 @@ vignette · denoise · background(흐림/단색/투명) · liquify · perspectiv
 5. 이 보이는 웃음·감은 눈 뜨기는 **생성 없이 안 됨** → 같은 사람 다른 컷에서 이식하는 방법만 제공.
    생성 모델(LivePortrait/LaMa/Real-ESRGAN)은 붙이지 않았다 — 원하면 다음 단계.
 
-## PC에서 바로 할 일 (순서)
+## PC 세션에서 끝낸 것 (2026-09-10)
 
-1. 저장소 받기 (사용자는 깃을 모른다 — 대신 해 줄 것):
-   `git clone https://github.com/photolark-cmd/korea-rundown-assets` →
-   `git checkout claude/photo-correction-program-o8ghsm`
-2. `python -m pip install -r tools/retouch/requirements.txt`, torch 는 CUDA 빌드로.
-   `ANTHROPIC_API_KEY` 는 사용자에게 받아 환경변수로 (파일에 적지 말 것).
-3. **대화창 실제 동작 확인이 1순위.** `python tools/retouch/studio.py --folder <사진폴더> --out 결과 --data work`
-   → 사진 열고 "학사모 기본 보정" 입력. 오류 나면 `Session.chat()` 수정
-   (`client.messages.create(model='claude-opus-5', thinking={'type':'adaptive'}, output_config={'effort':...})`).
-4. 학사모 원본 5~10장에 `pose_report()` 일괄 → 검출 깨지는 사진 찾기 (`_hat_mask`, `shoulder_points`).
-5. 원본/보정본 쌍 20개가 모이면 `learn-preset.mjs`(색 LUT) + `prepare.py`(정렬 수치) 부터.
+환경은 `D:\korea-rundown-assets` 에 있고 전부 실물로 확인했다.
+
+- **전용 가상환경** `tools/retouch/.venv` (전역 파이썬은 안 건드림).
+  numpy 2.2.6 · opencv 5.0 · mediapipe 1.0.1 · pillow · anthropic 1.4.0 ·
+  **torch 2.14.0+cu126 (`cuda True`, RTX 3080 Ti 인식)**.
+- **대화창이 실제로 동작한다.** 사진 열기 → 지시 입력 → 도구 호출 → 결과 반영 →
+  보고까지 브라우저에서 왕복 확인. 도구가 실패했을 때(`dodge_burn only=person` 에서
+  인물 인식 실패) Claude 가 오류를 읽고 마스크 없이 재시도해 성공하는 것까지 확인됨.
+- **API 키 없이 돌아간다** (`cli_backend.py`). 아래 별도 절 참고.
+- **`보정스튜디오.cmd`** — 더블클릭 실행기. 폴더 선택창 → 기억 → 빈 포트 탐색 → 기동.
+  폴더를 아이콘에 끌어다 놓아도 된다.
+- 기본 포트를 8765 → **8792** 로 바꿨다. 8765 는 refhub 수집기가 이미 쓴다.
+  윈도의 `allow_reuse_address` 때문에 이 충돌은 **오류 없이 통과하고 요청만 남의 서버로
+  간다.** 그래서 기동 전에 연결을 시도해 점유를 판정하고(`studio.port_taken`) 죽는다.
+- 한글 IME 로 조합 중인 Enter 가 지시를 잘라 보내던 것을 고쳤다 (`studio.html`, `isComposing`).
+
+### 대화창 백엔드 두 갈래 (`--backend auto|api|cli`)
+
+`auto` 는 `ANTHROPIC_API_KEY` 가 있으면 `api`, 없으면 설치된 Claude Code 로 우회한다.
+
+| | api | cli (`claude -p`) |
+|---|---|---|
+| 준비물 | API 키 + 결제수단 | Claude Code 설치만 (이미 있음) |
+| 한 턴 | 5~8초 | **16~28초** (실측: 첫 턴 27.6초, 이어지는 턴 16.1초) |
+| 비용 | 실제 청구 (턴당 대략 $0.01~0.02) | 현금 청구 없음, **구독 사용량**을 씀 (턴당 $0.035 상당) |
+
+cli 경로는 턴마다 Claude Code 자체 컨텍스트 약 70k 를 캐시에서 다시 읽는데 이걸 없앨 수
+없다 — `--bare` / `CLAUDE_CODE_SIMPLE=1` 로 걷어내면 OAuth 가 끊겨 오히려 API 키가
+필요해진다(실측: "Not logged in"). 즉 **키가 생기면 api 가 항상 낫다.** cli 는
+키 없이 오늘 당장 쓰기 위한 길이다.
+
+## 다음에 할 일 (순서)
+
+1. **학사모 원본 5~10장에 `pose_report()` 일괄** → 검출 깨지는 사진 찾기
+   (`_hat_mask`, `shoulder_points`). **사용자에게 사진 폴더 경로를 받아야 시작된다.**
+   사람 사진은 저장소 밖 원래 자리에서만 읽고, 커밋도 업로드도 하지 않는다.
+2. 알려진 약점 1(`extend_backdrop` 자동 영역 탐색)·3(모자 검출 일반화) 손보기.
+   둘 다 실사진 여러 장이 있어야 판정된다 → 1번 결과를 보고 정한다.
+3. 원본/보정본 쌍 20개가 모이면 `learn-preset.mjs`(색 LUT) + `prepare.py`(정렬 수치) 부터.
 
 ## 세션에서 있었던 결정·교훈
 
@@ -73,3 +102,9 @@ vignette · denoise · background(흐림/단색/투명) · liquify · perspectiv
 - 모자 판 자리 채우기는 단순 인페인팅이면 몸통 색이 번져 잔상이 남는다 → 배경 추정색 + 몸통 겹침만 벨벳.
 - 정규화 블러로 외삽할 때 분모가 0에 가까워지면 검게 무너진다 → 넓은 시그마로 단계적 대체.
 - OpenCV xphoto 패치 인페인팅은 인물·의자 조각을 배경에 복사한다 → 미채택.
+- (PC 세션) 포트가 이미 점유돼 있어도 윈도에서는 바인드가 성공한다. "떴다 + 200 이 온다"
+  두 신호가 모두 참인데 응답한 쪽은 다른 프로그램이었다. 검증의 첫 질문은 "정상인가"가
+  아니라 "내가 재는 게 맞는 대상인가"다.
+- (PC 세션) `requirements.txt` 의 `torch` 는 이름만으로 CPU 판이 깔린다. 설치는 성공하고
+  임포트도 되고 학습도 돌아간다 — GPU 만 안 쓸 뿐이다. 설치 뒤
+  `torch.cuda.is_available()` 을 반드시 찍어 볼 것.

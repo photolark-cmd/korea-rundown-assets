@@ -2,3 +2,9 @@ node_modules/
 tools/fonts/
 tools/retouch/models/
 __pycache__/
+
+# 사진 보정 도구 — 로컬 전용 (사람 사진은 절대 커밋하지 않는다)
+tools/retouch/.venv/
+tools/retouch/work/
+tools/retouch/retouched/
+tools/retouch/photos/
