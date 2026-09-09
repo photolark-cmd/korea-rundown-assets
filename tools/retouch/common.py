@@ -152,11 +152,11 @@ def normalise(pts, ref=None):
     return (pts - centre) @ R.T / width
 
 
-def crop_transform(pts, face_size):
+def crop_transform(pts, face_size, margin=CROP_MARGIN):
     """Affine (2x3) taking image pixels to a square crop where the face is
     upright, centred, and `face_size` pixels wide. Returns (M, side)."""
     centre, width, roll = face_frame(pts)
-    side = int(round(face_size * CROP_MARGIN))
+    side = int(round(face_size * margin))
     scale = face_size / width
     M = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])), np.degrees(roll), scale)
     M[:, 2] += np.array([side / 2, side / 2]) - centre
@@ -213,11 +213,11 @@ def _disc(r):
 
 # ---------------------------------------------------------------- warping
 
-def anchor_points(pts, side):
+def anchor_points(pts, side, ring=ANCHOR_RING):
     """Fixed points so the warp fades to identity: a ring around the face plus
     the crop border."""
     centre = pts[FACE_OVAL].mean(0)
-    radius = np.linalg.norm(pts[FACE_OVAL] - centre, axis=1).max() * ANCHOR_RING
+    radius = np.linalg.norm(pts[FACE_OVAL] - centre, axis=1).max() * ring
     ang = np.linspace(0, 2 * np.pi, 24, endpoint=False)
     ring = centre + radius * np.stack([np.cos(ang), np.sin(ang)], 1)
     ring = np.clip(ring, 1, side - 2)

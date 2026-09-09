@@ -183,6 +183,12 @@ class Session:
         bits.append('되돌리기 가능: ' + (' → '.join(s['undo']) if s['undo'] else '없음'))
         bits.append('얼굴: ' + {None: '아직 확인 안 함', True: '검출됨', False: '없음'}[s['face']])
         bits.append('학습된 얼굴 모델: ' + ('있음' if s['models'] else '없음 (face_models 사용 불가)'))
+        if s['face'] and self.pts is not None:
+            bits.append(f'눈높이 기울기 {np.degrees(C.face_frame(self.pts)[2]):+.1f}°')
+        if self.args.folder and os.path.isdir(self.args.folder):
+            others = [f for f in C.list_images(self.args.folder) if f != self.name][:30]
+            if others:
+                bits.append('폴더의 다른 사진(eyes_from 의 donor 로 쓸 수 있음): ' + ', '.join(others))
         return ' · '.join(bits)
 
     # ---- edits
@@ -262,6 +268,102 @@ class Session:
             raise ValueError('크롭 영역이 너무 작습니다')
         self.snapshot('크롭')
         self.base = np.ascontiguousarray(self.base[Y0:Y1, X0:X1])
+        self.pts_checked = False
+
+    # ---- pose: whole-image levelling, head-only tilt, eyes from another shot
+    MAX_HEAD_TILT = 12.0
+
+    def edit_straighten(self, angle=None):
+        """Rotate the whole photo so the eyes are level (or by `angle` degrees), then
+        crop away the empty corners."""
+        if angle is None:
+            pts = self.landmarks()
+            if pts is None:
+                raise ValueError('얼굴을 찾지 못해 기울기를 잴 수 없습니다. angle 을 직접 주세요')
+            angle = float(np.degrees(C.face_frame(pts)[2]))
+        h, w = self.base.shape[:2]
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+        rot = cv2.warpAffine(self.base, M, (w, h), flags=cv2.INTER_LANCZOS4)
+        a = abs(np.radians(angle))
+        sa, ca = np.sin(a), np.cos(a)
+        long_, short = max(w, h), min(w, h)
+        if short <= 2 * sa * ca * long_ or abs(sa - ca) < 1e-10:
+            x = 0.5 * short
+            wr, hr = (x / sa, x / ca) if w >= h else (x / ca, x / sa)
+        else:
+            c2 = ca * ca - sa * sa
+            wr, hr = (w * ca - h * sa) / c2, (h * ca - w * sa) / c2
+        wr, hr = int(wr), int(hr)
+        x0, y0 = (w - wr) // 2, (h - hr) // 2
+        self.snapshot(f'수평 {angle:+.1f}°')
+        self.base = np.ascontiguousarray(rot[y0:y0 + hr, x0:x0 + wr])
+        self.pts_checked = False
+        return angle
+
+    def edit_head_tilt(self, angle=None):
+        """Rotate only the head about a pivot below the chin, warping the pixels
+        around it so the neck and hair follow. Small angles only."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        if angle is None:
+            angle = float(np.degrees(C.face_frame(pts)[2]))
+        if abs(angle) > self.MAX_HEAD_TILT:
+            raise ValueError(f'고개만 돌리는 건 ±{self.MAX_HEAD_TILT:g}° 까지입니다 (요청 {angle:+.1f}°). 사진 전체를 돌리는 straighten 을 쓰세요')
+        from retouch import paste_back
+        face_size = 1024
+        M, side = C.crop_transform(pts, face_size, margin=2.6)
+        crop = cv2.warpAffine(self.base, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        pc = C.apply_affine(M, pts)
+        _, fw, _ = C.face_frame(pc)
+        pivot = pc[152] + np.array([0, 0.35 * fw], np.float32)          # a bit below the chin
+        R = cv2.getRotationMatrix2D((float(pivot[0]), float(pivot[1])), angle, 1.0)
+        target = C.apply_affine(R, pc)
+        anchors = C.anchor_points(pc, side, ring=2.1)
+        warped = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
+        centre = pc[C.FACE_OVAL].mean(0)
+        radius = np.linalg.norm(pc[C.FACE_OVAL] - centre, axis=1).max() * 2.1
+        mask = np.zeros((side, side), np.uint8)
+        cv2.circle(mask, (int(centre[0]), int(centre[1])), int(radius), 255, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), face_size * 0.05).astype(np.float32) / 255
+        self.snapshot(f'고개 {angle:+.1f}°')
+        self.base = paste_back(self.base, warped, M, mask)
+        self.pts_checked = False
+        return angle
+
+    STABLE = [6, 168, 197, 195, 33, 133, 362, 263, 70, 105, 107, 336, 334, 300, 234, 454]
+
+    def edit_eyes_from(self, donor_name, which='both'):
+        """Take the eyes from another photo of the same person (same session,
+        similar angle), align them on the stable landmarks around the eyes and
+        blend them in."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        if not self.args.folder:
+            raise ValueError('--folder 없이 시작해서 다른 사진을 열 수 없습니다')
+        donor = C.imread(os.path.join(self.args.folder, os.path.basename(donor_name)))
+        dpts = self._lm.detect(donor)
+        if dpts is None:
+            raise ValueError(f'{donor_name} 에서 얼굴을 찾지 못했습니다')
+        A, _ = cv2.estimateAffinePartial2D(dpts[self.STABLE], pts[self.STABLE], method=cv2.LMEDS)
+        if A is None:
+            raise ValueError('두 사진의 얼굴을 맞추지 못했습니다')
+        h, w = self.base.shape[:2]
+        aligned = cv2.warpAffine(donor, A, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        _, fw, _ = C.face_frame(pts)
+        out = self.base.copy()
+        eyes = {'left': (33, 133), 'right': (362, 263)}
+        for name, (a, b) in eyes.items():
+            if which != 'both' and which != name:
+                continue
+            c = (pts[a] + pts[b]) / 2
+            span = float(np.linalg.norm(pts[b] - pts[a]))
+            mask = np.zeros((h, w), np.uint8)
+            cv2.ellipse(mask, (int(c[0]), int(c[1])), (int(span * 0.95), int(span * 0.62)), 0, 0, 360, 255, -1)
+            out = cv2.seamlessClone(aligned, out, mask, (int(c[0]), int(c[1])), cv2.NORMAL_CLONE)
+        self.snapshot(f'눈 ← {donor_name}')
+        self.base = out
         self.pts_checked = False
 
     def save(self, size='orig', name=None):
@@ -383,6 +485,7 @@ auto_levels 는 채널별 히스토그램을 펴서 색 틀어짐·뿌연 느낌
 smooth_skin 은 얼굴 피부만 부드럽게(0~1). face_models 는 사용자의 보정 쌍으로 학습된 얼굴형·질감 모델이며 [현재 상태]에 "있음"일 때만 씁니다.
 crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)은 save 의 size 로 처리되며 가운데 기준으로 잘립니다.
 
+기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
 저장(save)은 사용자가 저장하라고 할 때만 합니다. 되돌리기는 undo. 요청이 애매하면 한 줄로 되묻습니다. 사진 속 인물에 대한 평가는 하지 않습니다."""
 
     def run_tool(self, name, inp):
@@ -434,6 +537,15 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'crop':
                 self.edit_crop(float(inp['x0']), float(inp['y0']), float(inp['x1']), float(inp['y1']))
                 return f'크롭: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
+            if name == 'straighten':
+                a = self.edit_straighten(inp.get('angle'))
+                return f'사진 전체를 {a:+.1f}° 돌려 수평을 맞추고 가장자리를 잘라냈습니다: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
+            if name == 'head_tilt':
+                a = self.edit_head_tilt(inp.get('angle'))
+                return f'고개만 {a:+.1f}° 돌렸습니다', self.render()
+            if name == 'eyes_from':
+                self.edit_eyes_from(inp['donor'], inp.get('which', 'both'))
+                return f"{inp['donor']} 의 눈을 옮겨 붙였습니다", self.render()
             if name == 'undo':
                 label = self.undo()
                 return (f'되돌림: {label}' if label else '되돌릴 것이 없음'), self.render()
@@ -464,6 +576,12 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'geom_strength': {'type': 'number'}, 'tex_strength': {'type': 'number'}}}},
     {'name': 'crop', 'description': '0~1 비율 상자로 자른다.',
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
+    {'name': 'straighten', 'description': '사진 전체를 돌려 눈높이를 수평으로 맞추고(카메라가 기울어진 경우) 빈 모서리를 잘라낸다. angle 을 생략하면 얼굴에서 잰 기울기만큼, 주면 그 각도(도, 양수=반시계)만큼.',
+     'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
+    {'name': 'head_tilt', 'description': '몸은 그대로 두고 고개만 돌린다(±12° 까지). angle 생략 시 눈높이가 수평이 되게. 목·머리카락 주변이 함께 늘어나므로 작은 각도에서만 자연스럽다.',
+     'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
+    {'name': 'eyes_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 눈을 가져와 붙인다. 눈 감은 사진 구제용. 같은 촬영·비슷한 각도의 사진이어야 한다. which: both | left | right.',
+     'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}, 'which': {'type': 'string', 'enum': ['both', 'left', 'right']}}, 'required': ['donor']}},
     {'name': 'undo', 'description': '마지막 수정을 되돌린다.', 'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'save', 'description': '결과를 저장한다. size: orig | 1600 (가로 1600) | 1200x630 (영문 썸네일) | 1080x1080 (국내 썸네일).',
      'input_schema': {'type': 'object', 'properties': {'size': {'type': 'string', 'enum': list(SIZES)}, 'name': {'type': 'string'}}}},
