@@ -16,6 +16,12 @@
   input[type=file] { display:none; }
   .spacer { flex:1; }
   .chip { color:var(--muted); font-size:12px; }
+  /* 폴더 이름이 길어 줄바꿈되면 필름스트립이 세로로 부풀어 사진 패널을 잡아먹는다.
+     한 줄로 묶고 가로로만 흐르게 한다. */
+  /* flex:none 이 없으면 flex 컨테이너가 칩을 납작하게 눌러 글자가 통째로 사라진다. */
+  .strip .chip { flex:0 0 auto; white-space:nowrap; align-self:center; padding:6px 10px;
+                 border:1px solid var(--line); border-radius:6px; }
+  .strip { max-height:76px; align-items:center; }
   main { flex:1; display:flex; min-height:0; }
   .stage { flex:1; display:flex; gap:10px; padding:12px; min-width:0; }
   figure { flex:1; margin:0; min-width:0; display:flex; flex-direction:column; gap:6px; }
@@ -39,7 +45,9 @@
   .ctl .row b { color:var(--text); font-weight:500; font-variant-numeric:tabular-nums; }
   input[type=range] { width:100%; accent-color:var(--accent); margin:2px 0 0; }
   .strip { flex:none; display:flex; gap:8px; padding:8px 12px; border-top:1px solid var(--line); background:var(--panel); overflow-x:auto; min-height:68px; }
-  .strip img { height:50px; border-radius:4px; border:2px solid transparent; cursor:pointer; flex:none; }
+  /* min-width 가 없으면 아직 안 받은 썸네일은 폭 0 이라 전부 같은 자리에 겹치고,
+     그러면 화면 밖 판정이 안 돼 지연 로딩이 통째로 무력해진다. */
+  .strip img { height:50px; min-width:38px; background:#222; border-radius:4px; border:2px solid transparent; cursor:pointer; flex:none; }
   .strip img.on { border-color:var(--accent); }
   .busy { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(14,16,19,.55); color:var(--muted); font-size:13px; }
   .busy.on { display:flex; }
@@ -48,7 +56,9 @@
 <body>
 <header>
   <h1>보정 스튜디오</h1>
-  <label class="file">사진 열기<input id="pick" type="file" accept="image/*"></label>
+  <button id="openFolder">📁 폴더 열기</button>
+  <button id="openFiles">🖼 사진 고르기</button>
+  <label class="file" title="다른 곳에 있는 사진 한 장을 업로드해서 엽니다">＋<input id="pick" type="file" accept="image/*"></label>
   <select id="preset"><option value="">프리셋 없음</option></select>
   <button id="auto">자동 보정</button>
   <button id="undo">되돌리기</button>
@@ -128,16 +138,85 @@ async function send() {
   setBusy(false);
 }
 
+// 썸네일은 화면에 들어올 때만 받는다. 한 촬영 폴더가 수백 장이라, 한꺼번에
+// 요청하면 원본 수백 장을 동시에 디코딩하느라 화면이 멈춘 것처럼 보인다.
+const thumbSeen = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const im = e.target;
+    thumbSeen.unobserve(im);
+    im.src = '/api/thumb?' + encodeURIComponent(im.dataset.name);
+  }
+}, {root: null, rootMargin: '400px'});
+
+function renderStrip(j) {
+  files = j.files || [];
+  const strip = $('strip'); strip.innerHTML = '';
+  const subs = j.subfolders || [];
+  // 위로 가는 길은 항상 열어 둔다. 촬영본은 촬영폴더/원본/학사모 처럼 여러 겹이라
+  // 한 번 잘못 들어가면 돌아올 수단이 없으면 창을 닫는 수밖에 없다.
+  if (j.folder) {
+    const up = document.createElement('span');
+    up.className = 'chip'; up.style.cursor = 'pointer';
+    up.textContent = '⬆ 상위 폴더';
+    up.title = j.folder;
+    up.onclick = () => goFolder({up: true});
+    strip.appendChild(up);
+  }
+  if (files.length) {
+    for (const f of files) {
+      const im = new Image(); im.title = f; im.dataset.name = f;
+      im.onclick = () => open(f); strip.appendChild(im);
+      thumbSeen.observe(im);
+    }
+    return;
+  }
+  if (subs.length) {
+    const note = document.createElement('span');
+    note.className = 'chip';
+    note.textContent = '이 폴더엔 사진이 없습니다. 촬영 폴더를 고르세요 →';
+    strip.appendChild(note);
+    for (const s of subs) {
+      const c = document.createElement('span');
+      c.className = 'chip'; c.style.cursor = 'pointer';
+      c.textContent = '📁 ' + s.name + ' (' + s.count + ')';
+      c.onclick = () => goFolder({name: s.name});
+      strip.appendChild(c);
+    }
+    return;
+  }
+  const none = document.createElement('span');   // innerHTML 로 덮으면 위 칩까지 날아간다
+  none.className = 'chip';
+  none.textContent = '이 폴더에도, 바로 아래 폴더에도 사진이 없습니다';
+  strip.appendChild(none);
+}
+
+async function goFolder(body) {
+  if (busy) return; setBusy(true);
+  try { renderStrip(await api('/api/folder', body)); }
+  catch (e) { addMsg('sys', '오류: ' + e.message); }
+  setBusy(false);
+}
+
+// 윈도 기본 열기창을 띄운다. 창은 브라우저가 아니라 프로그램 쪽에 뜬다.
+async function browse(mode) {
+  if (busy) return; setBusy(true);
+  $('status').textContent = '열기 창을 띄웠습니다. 화면 앞으로 나오지 않으면 작업표시줄을 보세요';
+  try {
+    const j = await api('/api/browse', {mode});
+    renderStrip(j);
+    $('status').textContent = j.picked
+      ? '고른 사진 ' + (j.files || []).length + '장'
+      : (j.folder || '') + ' — ' + (j.files || []).length + '장';
+  } catch (e) { addMsg('sys', '오류: ' + e.message); $('status').textContent = '열기 취소'; }
+  setBusy(false);
+}
+
 async function loadStrip() {
   const j = await fetch('/api/list').then(r => r.json());
-  files = j.files || []; state = j.state;
+  state = j.state;
   for (const p of (j.presets || [])) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.name; $('preset').appendChild(o); }
-  const strip = $('strip'); strip.innerHTML = '';
-  for (const f of files) {
-    const im = new Image(); im.src = '/api/thumb?' + encodeURIComponent(f); im.title = f; im.dataset.name = f;
-    im.onclick = () => open(f); strip.appendChild(im);
-  }
-  if (!files.length) strip.innerHTML = '<span class="chip">--folder 로 시작하면 폴더의 사진이 여기 나옵니다</span>';
+  renderStrip(j);
 }
 async function open(name) {
   if (busy) return; setBusy(true);
@@ -157,6 +236,8 @@ function buildPanel() {
   }
 }
 
+$('openFolder').addEventListener('click', () => browse('folder'));
+$('openFiles').addEventListener('click', () => browse('files'));
 $('pick').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return; setBusy(true);
   try { show(await api('/api/upload', null, {name: f.name, data: await f.arrayBuffer()})); $('chat').innerHTML = ''; addMsg('sys', f.name + ' 열림'); }

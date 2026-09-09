@@ -82,6 +82,10 @@ class Session:
         self._lm = None
         self._retoucher = None
         self._client = None
+        self._thumbs = {}
+        self._counts = {}
+        self.picked = None      # 사용자가 직접 고른 사진들 (폴더 목록보다 우선)
+        self._thumb_lock = threading.Lock()
         self.messages = []
         self.clear()
 
@@ -95,6 +99,119 @@ class Session:
         self.pts = None
         self.pts_checked = False
         self.alpha = None
+
+    def subfolders(self):
+        """사진이 든 바로 아래 폴더들. 상위 폴더를 골랐을 때 화면에서 고를 수 있게.
+
+        개수는 반드시 **재귀로** 센다. 촬영본은 촬영폴더/원본/학사모 처럼 여러 겹이라,
+        직속 사진만 세면 안쪽에만 사진이 있는 촬영 폴더가 목록에서 통째로 사라진다."""
+        root = self.args.folder
+        if not root or not os.path.isdir(root):
+            return []
+        out = []
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            return []
+        for name in names:
+            path = os.path.join(root, name)
+            if not os.path.isdir(path):
+                continue
+            n = self._count_deep(path)
+            if n:
+                out.append({'name': name, 'count': n})
+        return out
+
+    def _count_deep(self, path, cap=5000):
+        """하위까지 통틀어 이미지가 몇 장인지. 폴더별로 캐시한다 (네트워크 드라이브일 수 있음)."""
+        hit = self._counts.get(path)
+        if hit is not None:
+            return hit
+        n = 0
+        try:
+            for _, _, files in os.walk(path):
+                n += sum(1 for f in files if os.path.splitext(f)[1].lower() in C.IMG_EXT)
+                if n >= cap:
+                    break
+        except OSError:
+            pass
+        self._counts[path] = n
+        return n
+
+    def set_folder(self, path):
+        if not os.path.isdir(path):
+            raise ValueError('폴더가 없습니다: %s' % path)
+        self.args.folder = path
+        self.picked = None
+
+    def listing(self):
+        """필름스트립에 무엇을 보여 줄지. 사진을 직접 고른 상태면 그 목록이 이긴다."""
+        if self.picked:
+            return {'folder': os.path.dirname(self.picked[0]),
+                    'files': [os.path.basename(p) for p in self.picked],
+                    'subfolders': [], 'picked': True}
+        folder = self.args.folder
+        files = C.list_images(folder) if folder and os.path.isdir(folder) else []
+        return {'folder': folder, 'files': files,
+                'subfolders': [] if files else self.subfolders(), 'picked': False}
+
+    def path_of(self, name):
+        """필름스트립의 이름 하나를 실제 경로로. 고른 사진은 폴더가 제각각일 수 있다."""
+        name = os.path.basename(name)
+        if self.picked:
+            for p in self.picked:
+                if os.path.basename(p) == name:
+                    return p
+        return os.path.join(self.args.folder, name)
+
+    def browse(self, mode):
+        """윈도 기본 열기 대화상자. 폴더 파고들기보다 이게 사람 손에 맞는다.
+
+        tkinter 는 만든 스레드에서만 다뤄야 하는데, 여기는 요청 스레드이고 그 안에서
+        만들고 부수므로 규칙을 지킨다. 대화상자가 브라우저 뒤로 숨지 않게 topmost."""
+        import tkinter
+        from tkinter import filedialog
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        start = self.args.folder if self.args.folder and os.path.isdir(self.args.folder) else None
+        try:
+            if mode == 'folder':
+                path = filedialog.askdirectory(title='사진이 든 폴더', initialdir=start, parent=root)
+                if path:
+                    self.set_folder(os.path.normpath(path))
+            else:
+                paths = filedialog.askopenfilenames(
+                    title='사진 고르기 (Ctrl·Shift 로 여러 장)', initialdir=start, parent=root,
+                    filetypes=[('사진', '*.jpg *.jpeg *.png *.webp *.tif *.tiff'), ('모든 파일', '*.*')])
+                paths = [os.path.normpath(p) for p in (paths or [])]
+                if paths:
+                    self.picked = paths
+                    self.args.folder = os.path.dirname(paths[0])
+        finally:
+            root.destroy()
+        return self.listing()
+
+    def thumb(self, path):
+        """필름스트립 썸네일. 원본이 2천만 화소짜리라 매번 디코딩하면 못 쓴다 —
+        수백 장이 동시에 요청되므로 한 번 만든 건 메모리에 들고 있는다."""
+        key = (path, os.path.getmtime(path))
+        with self._thumb_lock:
+            hit = self._thumbs.get(key)
+        if hit is not None:
+            return hit
+        # C.imread 는 flags 를 받지 않는다. 썸네일은 1/4 크기로 디코딩해야 (원본이 2천만
+        # 화소라) 쓸 만한 속도가 나오므로 여기서 직접 디코딩한다.
+        data = np.fromfile(path, np.uint8)                 # 비ASCII 경로 대응
+        img = cv2.imdecode(data, cv2.IMREAD_REDUCED_COLOR_4)
+        if img is None:
+            raise ValueError('열 수 없는 이미지: %s' % path)
+        buf = cv2.imencode('.jpg', downscale(img, 160), [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
+        with self._thumb_lock:
+            if len(self._thumbs) > 2000:
+                self._thumbs.clear()
+            self._thumbs[key] = buf
+        return buf
 
     # ---- presets
     def _load_presets(self, presets_js):
@@ -1497,7 +1614,7 @@ class Handler(BaseHTTPRequestHandler):
             return {'state': s.state()}
         return {'state': s.state(), 'orig': jpeg_b64(downscale(s.orig, PREVIEW_MAX)), 'out': jpeg_b64(s.render())}
 
-    def do_GET(self):
+    def _get(self):
         if self.path.split('?')[0] == '/':
             body = self.html.encode('utf-8')
             self.send_response(200)
@@ -1506,22 +1623,37 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == '/api/list':
-            folder = self.session.args.folder
-            files = C.list_images(folder) if folder and os.path.isdir(folder) else []
-            self._json({'folder': folder, 'files': files, 'state': self.session.state(),
+            self._json({**self.session.listing(), 'state': self.session.state(),
                         'presets': [{'id': p['id'], 'name': p['name']} for p in self.session.presets]})
         elif self.path.startswith('/api/thumb?'):
             name = urllib.parse.unquote(self.path.split('?', 1)[1])
-            path = os.path.join(self.session.args.folder, os.path.basename(name))
-            img = C.imread(path)
-            buf = cv2.imencode('.jpg', downscale(img, 160), [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
+            path = self.session.path_of(name)
+            try:
+                buf = self.session.thumb(path)
+            except Exception as e:
+                # 한 장이 깨졌다고 연결을 끊으면 필름스트립 전체가 멈춘 것처럼 보인다.
+                # 다만 조용히 404 만 내면 원인을 못 찾으므로 콘솔에는 남긴다.
+                print('썸네일 실패: %s — %s' % (path, e), file=sys.stderr)
+                return self.send_error(404)
             self.send_response(200)
             self.send_header('Content-Type', 'image/jpeg')
             self.send_header('Content-Length', str(len(buf)))
+            self.send_header('Cache-Control', 'max-age=3600')
             self.end_headers()
             self.wfile.write(buf)
         else:
             self.send_error(404)
+
+    def do_GET(self):
+        # do_POST 와 달리 GET 에는 예외 처리가 없어서, 파일 하나가 깨지면 응답 없이
+        # 연결만 닫혔다(브라우저에는 '사이트에 연결할 수 없음'으로 보인다).
+        try:
+            self._get()
+        except Exception as e:
+            try:
+                self.send_error(500, explain=str(e))
+            except Exception:
+                pass
 
     def do_POST(self):
         n = int(self.headers.get('Content-Length', 0))
@@ -1534,8 +1666,21 @@ class Handler(BaseHTTPRequestHandler):
                     s.open(data=raw, name=os.path.basename(name))
                 return self._json(self._previews())
             body = json.loads(raw.decode('utf-8')) if raw else {}
+            if self.path == '/api/folder':
+                # 하위 폴더로 내려가거나(name), 상위로 되돌아간다(up=true).
+                with s.lock:
+                    if body.get('up'):
+                        s.set_folder(os.path.dirname(os.path.normpath(s.args.folder)))
+                    else:
+                        s.set_folder(os.path.join(s.args.folder, os.path.basename(body['name'])))
+                    listing = s.listing()
+                return self._json({**listing, 'state': s.state()})
+            if self.path == '/api/browse':
+                with s.lock:
+                    listing = s.browse(body.get('mode') or 'folder')
+                return self._json({**listing, 'state': s.state()})
             if self.path == '/api/open':
-                path = os.path.join(s.args.folder, os.path.basename(body['name']))
+                path = s.path_of(body['name'])
                 with s.lock:
                     s.open(path=path)
                 return self._json(self._previews())
