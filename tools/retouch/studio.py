@@ -83,7 +83,6 @@ class Session:
         self._retoucher = None
         self._client = None
         self._thumbs = {}
-        self._counts = {}
         self.picked = None      # 사용자가 직접 고른 사진들 (폴더 목록보다 우선)
         self._thumb_lock = threading.Lock()
         self.messages = []
@@ -100,44 +99,6 @@ class Session:
         self.pts_checked = False
         self.alpha = None
 
-    def subfolders(self):
-        """사진이 든 바로 아래 폴더들. 상위 폴더를 골랐을 때 화면에서 고를 수 있게.
-
-        개수는 반드시 **재귀로** 센다. 촬영본은 촬영폴더/원본/학사모 처럼 여러 겹이라,
-        직속 사진만 세면 안쪽에만 사진이 있는 촬영 폴더가 목록에서 통째로 사라진다."""
-        root = self.args.folder
-        if not root or not os.path.isdir(root):
-            return []
-        out = []
-        try:
-            names = sorted(os.listdir(root))
-        except OSError:
-            return []
-        for name in names:
-            path = os.path.join(root, name)
-            if not os.path.isdir(path):
-                continue
-            n = self._count_deep(path)
-            if n:
-                out.append({'name': name, 'count': n})
-        return out
-
-    def _count_deep(self, path, cap=5000):
-        """하위까지 통틀어 이미지가 몇 장인지. 폴더별로 캐시한다 (네트워크 드라이브일 수 있음)."""
-        hit = self._counts.get(path)
-        if hit is not None:
-            return hit
-        n = 0
-        try:
-            for _, _, files in os.walk(path):
-                n += sum(1 for f in files if os.path.splitext(f)[1].lower() in C.IMG_EXT)
-                if n >= cap:
-                    break
-        except OSError:
-            pass
-        self._counts[path] = n
-        return n
-
     def set_folder(self, path):
         if not os.path.isdir(path):
             raise ValueError('폴더가 없습니다: %s' % path)
@@ -149,11 +110,10 @@ class Session:
         if self.picked:
             return {'folder': os.path.dirname(self.picked[0]),
                     'files': [os.path.basename(p) for p in self.picked],
-                    'subfolders': [], 'picked': True}
+                    'picked': True}
         folder = self.args.folder
         files = C.list_images(folder) if folder and os.path.isdir(folder) else []
-        return {'folder': folder, 'files': files,
-                'subfolders': [] if files else self.subfolders(), 'picked': False}
+        return {'folder': folder, 'files': files, 'picked': False}
 
     def path_of(self, name):
         """필름스트립의 이름 하나를 실제 경로로. 고른 사진은 폴더가 제각각일 수 있다."""
@@ -1666,15 +1626,6 @@ class Handler(BaseHTTPRequestHandler):
                     s.open(data=raw, name=os.path.basename(name))
                 return self._json(self._previews())
             body = json.loads(raw.decode('utf-8')) if raw else {}
-            if self.path == '/api/folder':
-                # 하위 폴더로 내려가거나(name), 상위로 되돌아간다(up=true).
-                with s.lock:
-                    if body.get('up'):
-                        s.set_folder(os.path.dirname(os.path.normpath(s.args.folder)))
-                    else:
-                        s.set_folder(os.path.join(s.args.folder, os.path.basename(body['name'])))
-                    listing = s.listing()
-                return self._json({**listing, 'state': s.state()})
             if self.path == '/api/browse':
                 with s.lock:
                     listing = s.browse(body.get('mode') or 'folder')

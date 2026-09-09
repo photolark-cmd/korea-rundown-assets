@@ -16,11 +16,7 @@
   input[type=file] { display:none; }
   .spacer { flex:1; }
   .chip { color:var(--muted); font-size:12px; }
-  /* 폴더 이름이 길어 줄바꿈되면 필름스트립이 세로로 부풀어 사진 패널을 잡아먹는다.
-     한 줄로 묶고 가로로만 흐르게 한다. */
-  /* flex:none 이 없으면 flex 컨테이너가 칩을 납작하게 눌러 글자가 통째로 사라진다. */
-  .strip .chip { flex:0 0 auto; white-space:nowrap; align-self:center; padding:6px 10px;
-                 border:1px solid var(--line); border-radius:6px; }
+  .strip .chip { flex:0 0 auto; white-space:nowrap; align-self:center; }
   .strip { max-height:76px; align-items:center; }
   main { flex:1; display:flex; min-height:0; }
   .stage { flex:1; display:flex; gap:10px; padding:12px; min-width:0; }
@@ -152,64 +148,18 @@ const thumbSeen = new IntersectionObserver(entries => {
 function renderStrip(j) {
   files = j.files || [];
   const strip = $('strip'); strip.innerHTML = '';
-  const subs = j.subfolders || [];
-  // 위로 가는 길은 항상 열어 둔다. 촬영본은 촬영폴더/원본/학사모 처럼 여러 겹이라
-  // 한 번 잘못 들어가면 돌아올 수단이 없으면 창을 닫는 수밖에 없다.
-  if (j.folder) {
-    const up = document.createElement('span');
-    up.className = 'chip'; up.style.cursor = 'pointer';
-    up.textContent = '⬆ 상위 폴더';
-    up.title = j.folder;
-    up.onclick = () => goFolder({up: true});
-    strip.appendChild(up);
-  }
-  if (files.length) {
-    for (const f of files) {
-      const im = new Image(); im.title = f; im.dataset.name = f;
-      im.onclick = () => open(f); strip.appendChild(im);
-      thumbSeen.observe(im);
-    }
+  if (!files.length) {
+    const none = document.createElement('span');
+    none.className = 'chip';
+    none.textContent = '이 폴더엔 사진이 없습니다. 위의 「폴더 열기」나 「사진 고르기」로 다시 고르세요';
+    strip.appendChild(none);
     return;
   }
-  if (subs.length) {
-    const note = document.createElement('span');
-    note.className = 'chip';
-    note.textContent = '이 폴더엔 사진이 없습니다. 촬영 폴더를 고르세요 →';
-    strip.appendChild(note);
-    for (const s of subs) {
-      const c = document.createElement('span');
-      c.className = 'chip'; c.style.cursor = 'pointer';
-      c.textContent = '📁 ' + s.name + ' (' + s.count + ')';
-      c.onclick = () => goFolder({name: s.name});
-      strip.appendChild(c);
-    }
-    return;
+  for (const f of files) {
+    const im = new Image(); im.title = f; im.dataset.name = f;
+    im.onclick = () => open(f); strip.appendChild(im);
+    thumbSeen.observe(im);
   }
-  const none = document.createElement('span');   // innerHTML 로 덮으면 위 칩까지 날아간다
-  none.className = 'chip';
-  none.textContent = '이 폴더에도, 바로 아래 폴더에도 사진이 없습니다';
-  strip.appendChild(none);
-}
-
-async function goFolder(body) {
-  if (busy) return; setBusy(true);
-  try { renderStrip(await api('/api/folder', body)); }
-  catch (e) { addMsg('sys', '오류: ' + e.message); }
-  setBusy(false);
-}
-
-// 윈도 기본 열기창을 띄운다. 창은 브라우저가 아니라 프로그램 쪽에 뜬다.
-async function browse(mode) {
-  if (busy) return; setBusy(true);
-  $('status').textContent = '열기 창을 띄웠습니다. 화면 앞으로 나오지 않으면 작업표시줄을 보세요';
-  try {
-    const j = await api('/api/browse', {mode});
-    renderStrip(j);
-    $('status').textContent = j.picked
-      ? '고른 사진 ' + (j.files || []).length + '장'
-      : (j.folder || '') + ' — ' + (j.files || []).length + '장';
-  } catch (e) { addMsg('sys', '오류: ' + e.message); $('status').textContent = '열기 취소'; }
-  setBusy(false);
 }
 
 async function loadStrip() {
