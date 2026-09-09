@@ -756,9 +756,10 @@ class Session:
             k = max(3.0, float(strength) * w * 0.04)
             # blur only background pixels (normalised convolution) so the person
             # does not bleed a halo into the blurred backdrop
-            inv = (1 - m).astype(np.float32)
+            hard = cv2.erode((m[..., 0] < 0.3).astype(np.uint8), self._disc_px(int(w * 0.006))).astype(np.float32)
+            inv = hard[..., None]
             num = cv2.GaussianBlur(self.base.astype(np.float32) * inv, (0, 0), k)
-            den = cv2.GaussianBlur(inv[..., 0], (0, 0), k)[..., None]
+            den = cv2.GaussianBlur(hard, (0, 0), k)[..., None]
             bg = num / np.maximum(den, 1e-3)
             out = np.clip(self.base * m + bg * (1 - m), 0, 255).round().astype(np.uint8)
             self.snapshot('배경 흐림')
@@ -811,6 +812,168 @@ class Session:
         self.snapshot('원근 보정')
         self.base = cv2.warpPerspective(self.base, Hm, (tw, th), flags=cv2.INTER_LANCZOS4)
         self.pts_checked = False
+
+    # ---- graduation-portrait checks: level hat, level shoulders
+    def _hat_mask(self):
+        """Dark region of the person above the brows: the mortarboard and cap."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        pm = self.person_mask()
+        hsv = cv2.cvtColor(self.base, cv2.COLOR_BGR2HSV)
+        brow_y = int(pts[self.BROW_L + self.BROW_R][:, 1].min())
+        hat = ((hsv[..., 2] < 90) & (pm > 0.5)).astype(np.uint8)
+        hat[brow_y:] = 0
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(hat)
+        if n < 2:
+            raise ValueError('모자를 찾지 못했습니다 (어두운 모자만 자동 검출됩니다)')
+        best = max(range(1, n), key=lambda i: stats[i, cv2.CC_STAT_AREA])
+        _, fw, _ = C.face_frame(pts)
+        if stats[best, cv2.CC_STAT_WIDTH] < 0.8 * fw:
+            raise ValueError('모자를 찾지 못했습니다')
+        return (lab == best).astype(np.uint8), stats[best]
+
+    def hat_angle(self):
+        hat, (x0, y0, bw, bh, _) = self._hat_mask()
+        top = np.array([(x, np.argmax(hat[:, x] > 0)) for x in range(x0, x0 + bw) if hat[:, x].any()], np.float32)
+        # central 60% only: the board's raised corners and rounded ends bias the fit
+        mid = top[int(len(top) * 0.2): int(len(top) * 0.8)]
+        mid = mid[np.abs(mid[:, 1] - np.median(mid[:, 1])) < 0.1 * bh]
+        vx, vy, _, _ = cv2.fitLine(mid, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        return float(np.degrees(np.arctan2(vy, vx)))
+
+    def edit_level_hat(self, angle=None):
+        """Rotate the flat board of a mortarboard so its top edge is level. Only
+        the board moves (the cap stays on the head); the backdrop it uncovers is
+        filled from the surroundings."""
+        hat, (x0, y0, bw, bh, _) = self._hat_mask()
+        if angle is None:
+            angle = self.hat_angle()
+        if abs(angle) < 0.15:
+            return angle
+        if abs(angle) > 12:
+            raise ValueError(f'모자 기울기 {angle:+.1f}° 는 자동 보정 범위(±12°)를 넘습니다')
+        widths = hat.sum(1)
+        # the board is the wide thin slab: rows near the maximum width, contiguous from the top
+        wide = widths > 0.72 * widths.max()
+        first = int(np.argmax(wide))
+        last = first
+        while last + 1 < len(wide) and wide[last + 1]:
+            last += 1
+        board_rows = np.arange(first, last + 1)
+        if len(board_rows) < 4 or len(board_rows) > 0.6 * bh:
+            raise ValueError('모자 판을 찾지 못했습니다 (판이 몸통보다 뚜렷이 넓어야 합니다)')
+        region = np.zeros_like(hat)
+        lo, hi = board_rows.min(), board_rows.max()
+        region[lo: hi + 1] = hat[lo: hi + 1]
+        region = cv2.dilate(region, self._disc_px(4))
+        ys, xs = np.nonzero(region)
+        centre = (float(xs.mean()), float(ys.mean()))
+        h, w = self.base.shape[:2]
+        # fill the board's old place: backdrop estimate where it was against the
+        # backdrop, velvet inpainted where it overlapped the cap; then paste the
+        # rotated board on top. (Plain inpainting smears the dark cap upward and
+        # leaves a ghost of the old board.)
+        hole = cv2.dilate(region, self._disc_px(8))
+        pm = self.person_mask()
+        bg = cv2.erode((pm < 0.3).astype(np.uint8), self._disc_px(int(w * 0.006))).astype(np.float32)
+        bg[hat > 0] = 0
+        sig = w * 0.012
+        est = cv2.GaussianBlur(self.base.astype(np.float32) * bg[..., None], (0, 0), sig) / np.maximum(cv2.GaussianBlur(bg, (0, 0), sig), 1e-3)[..., None]
+        filled = self.base.copy()
+        filled[hole > 0] = np.clip(est[hole > 0], 0, 255).round().astype(np.uint8)
+        cap = hat.copy(); cap[: board_rows.max() + 1] = 0
+        cap_hole = (hole > 0) & (cv2.dilate(cap, self._disc_px(14)) > 0)
+        if cap_hole.any():
+            X0, Y0 = max(0, xs.min() - 60), max(0, ys.min() - 60)
+            X1, Y1 = min(w, xs.max() + 60), min(h, ys.max() + 60)
+            velvet = cv2.inpaint(self.base[Y0:Y1, X0:X1], cap_hole[Y0:Y1, X0:X1].astype(np.uint8), 9, cv2.INPAINT_TELEA)
+            sub = filled[Y0:Y1, X0:X1]; sub[cap_hole[Y0:Y1, X0:X1]] = velvet[cap_hole[Y0:Y1, X0:X1]]
+        R = cv2.getRotationMatrix2D(centre, angle, 1.0)
+        rot = cv2.warpAffine(self.base, R, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        rm = cv2.warpAffine(region.astype(np.float32), R, (w, h))
+        rm = cv2.GaussianBlur(rm, (0, 0), 2)[..., None]
+        self.snapshot(f'모자 수평 {angle:+.1f}°')
+        self.base = (filled * (1 - rm) + rot * rm).round().astype(np.uint8)
+        return angle
+
+    def shoulder_points(self, offset=0.95):
+        """Top of the silhouette at equal distances left and right of the face
+        centre — the two points an eye compares when judging the shoulder line."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        pm = self.person_mask()
+        c, fw, _ = C.face_frame(pts)
+        chin_y = int(pts[152, 1])
+        out = {}
+        for name, sign in (('left', -1), ('right', 1)):
+            x = int(round(c[0] + sign * offset * fw))
+            if not 0 <= x < pm.shape[1]:
+                raise ValueError('어깨 기준점이 사진 밖입니다')
+            win = max(2, int(0.015 * pm.shape[1]))
+            cols = pm[chin_y:, max(0, x - win): x + win + 1] > 0.5
+            if not cols.any():
+                raise ValueError(f'{name} 어깨를 찾지 못했습니다')
+            tops = [int(np.argmax(cols[:, j])) for j in range(cols.shape[1]) if cols[:, j].any()]
+            out[name] = (x, chin_y + int(np.median(tops)))
+        return out
+
+    def edit_level_shoulders(self, angle=None, left=None, right=None):
+        """Rotate the body below the neck so the shoulder line is level. Points
+        may be given (0..1 coords) instead of auto-detected."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        h, w = self.base.shape[:2]
+        c, fw, _ = C.face_frame(pts)
+        if angle is None:
+            if left and right:
+                (xl, yl), (xr, yr) = (left[0] * w, left[1] * h), (right[0] * w, right[1] * h)
+            else:
+                sp = self.shoulder_points()
+                (xl, yl), (xr, yr) = sp['left'], sp['right']
+            angle = float(np.degrees(np.arctan2(yr - yl, xr - xl)))
+            shoulder_y = (yl + yr) / 2
+        else:
+            shoulder_y = pts[152, 1] + 0.9 * fw
+        if abs(angle) < 0.15:
+            return angle
+        if abs(angle) > 10:
+            raise ValueError(f'어깨선 기울기 {angle:+.1f}° 는 자동 보정 범위(±10°)를 넘습니다')
+        pivot = (float(c[0]), float(pts[152, 1] + 0.3 * fw))          # base of the neck
+        y_top = int(max(0, pivot[1] - 0.25 * fw))
+        ys, xs = np.mgrid[y_top:h, 0:w].astype(np.float32)
+        wgt = np.clip((ys - (pivot[1] - 0.15 * fw)) / max(1.0, shoulder_y - pivot[1] + 0.15 * fw), 0, 1)
+        wgt = wgt * wgt * (3 - 2 * wgt)
+        R = cv2.getRotationMatrix2D(pivot, angle, 1.0)
+        rx = R[0, 0] * xs + R[0, 1] * ys + R[0, 2]
+        ry = R[1, 0] * xs + R[1, 1] * ys + R[1, 2]
+        map_x = (xs - (rx - xs) * wgt).astype(np.float32)
+        map_y = (ys - (ry - ys) * wgt).astype(np.float32)
+        out = self.base.copy()
+        out[y_top:] = cv2.remap(self.base, map_x, map_y, cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        self.snapshot(f'어깨 수평 {angle:+.1f}°')
+        self.base = out
+        self.pts_checked = False
+        return angle
+
+    def pose_report(self):
+        pts = self.landmarks()
+        if pts is None:
+            return '얼굴 없음'
+        bits = [f'고개 {np.degrees(C.face_frame(pts)[2]):+.1f}°']
+        try:
+            bits.append(f'모자 윗선 {self.hat_angle():+.1f}°')
+        except ValueError as e:
+            bits.append(f'모자: {e}')
+        try:
+            sp = self.shoulder_points()
+            (xl, yl), (xr, yr) = sp['left'], sp['right']
+            bits.append(f'어깨선 {np.degrees(np.arctan2(yr - yl, xr - xl)):+.1f}° (좌 {yl}px, 우 {yr}px)')
+        except ValueError as e:
+            bits.append(f'어깨: {e}')
+        return ' · '.join(bits) + '  (양수 = 오른쪽이 낮음)'
 
     def save(self, size='orig', name=None):
         from retouch import write_with_exif
@@ -936,6 +1099,7 @@ auto_levels 는 채널별 히스토그램을 펴서 색 틀어짐·뿌연 느낌
 smooth_skin 은 얼굴 피부만 부드럽게(0~1). face_models 는 사용자의 보정 쌍으로 학습된 얼굴형·질감 모델이며 [현재 상태]에 "있음"일 때만 씁니다.
 crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)은 save 의 size 로 처리되며 가운데 기준으로 잘립니다.
 
+학사모 사진(주 작업): 기준은 모자 수평 · 고개 수직 · 어깨선 좌우 일치 · 옷매무새. 먼저 pose_check 로 세 각도를 재고, level_hat → head_tilt → level_shoulders 순으로 맞춘 뒤(각 단계 미리보기 확인), 옷 주름·좌우 비대칭은 liquify 로 정리하고, crop → 배경 정리(background blur 약하게, dodge_burn only=background 로 머리 뒤 글로우) → smooth_skin → 색 순서로 마무리합니다.
 기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
 얼굴 리퀴파이(face_shape)는 포토샵 얼굴 인식 리퀴파이와 같은 슬라이더입니다. "눈 좀 크게" → eye_size 25, "턱 갸름하게" → jawline -30 face_width -15 식으로 작은 값부터, 결과를 보고 올립니다.
 표정: 살짝 미소·인상 풀기는 expression(워핑). 이가 보이는 활짝 웃음은 워핑으로 안 되고 mouth_from 으로 같은 사람의 웃는 컷에서 입을 가져오는 방법뿐입니다. 없는 이를 만들어내지는 못한다고 분명히 말하세요. 표정을 바꾼 뒤엔 미리보기를 보고 부자연스러우면 강도를 낮추거나 undo 합니다.
@@ -991,6 +1155,14 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'crop':
                 self.edit_crop(float(inp['x0']), float(inp['y0']), float(inp['x1']), float(inp['y1']))
                 return f'크롭: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
+            if name == 'pose_check':
+                return self.pose_report(), None
+            if name == 'level_hat':
+                a = self.edit_level_hat(inp.get('angle'))
+                return f'모자 판을 {a:+.1f}° 돌려 수평으로', self.render()
+            if name == 'level_shoulders':
+                a = self.edit_level_shoulders(inp.get('angle'), inp.get('left'), inp.get('right'))
+                return f'어깨선 {a:+.1f}° 를 수평으로 (목 아래 몸통 회전)', self.render()
             if name == 'straighten':
                 a = self.edit_straighten(inp.get('angle'))
                 return f'사진 전체를 {a:+.1f}° 돌려 수평을 맞추고 가장자리를 잘라냈습니다: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
@@ -1068,6 +1240,12 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'geom_strength': {'type': 'number'}, 'tex_strength': {'type': 'number'}}}},
     {'name': 'crop', 'description': '0~1 비율 상자로 자른다.',
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
+    {'name': 'pose_check', 'description': '학사모 사진 점검: 고개 기울기, 모자 윗선 기울기, 어깨선 기울기를 잰다(수정 아님). 양수 = 오른쪽이 낮음.',
+     'input_schema': {'type': 'object', 'properties': {}}},
+    {'name': 'level_hat', 'description': '학사모 판을 돌려 윗선을 수평으로. angle 생략 시 자동 측정값. 판만 움직이고 모자 몸통은 그대로.',
+     'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
+    {'name': 'level_shoulders', 'description': '어깨선을 수평으로: 목 아래 몸통을 회전(머리는 그대로). angle 생략 시 좌우 같은 거리의 실루엣 높이로 자동 측정. left/right 에 [x,y](0~1)를 주면 그 두 점을 어깨선으로 쓴다.',
+     'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}, 'left': {'type': 'array', 'items': {'type': 'number'}}, 'right': {'type': 'array', 'items': {'type': 'number'}}}}},
     {'name': 'straighten', 'description': '사진 전체를 돌려 눈높이를 수평으로 맞추고(카메라가 기울어진 경우) 빈 모서리를 잘라낸다. angle 을 생략하면 얼굴에서 잰 기울기만큼, 주면 그 각도(도, 양수=반시계)만큼.',
      'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
     {'name': 'head_tilt', 'description': '몸은 그대로 두고 고개만 돌린다(±12° 까지). angle 생략 시 눈높이가 수평이 되게. 목·머리카락 주변이 함께 늘어나므로 작은 각도에서만 자연스럽다.',
