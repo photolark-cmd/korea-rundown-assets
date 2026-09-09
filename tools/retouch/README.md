@@ -128,7 +128,7 @@ Claude API로 갑니다(도구 실행 후 확인용은 800px). 지시 한 번에
 1. `pose_check` — 세 각도 측정 (양수 = 오른쪽이 낮음)
 2. `level_hat` → `head_tilt` → `level_shoulders` — 각 단계 미리보기 확인
 3. 옷 주름·좌우 비대칭은 `liquify` 로 손질
-4. `crop` → `background blur` 약하게 → `dodge_burn only=background` 로 머리 뒤 글로우 → `smooth_skin` → 커브·색
+4. `crop` → `smooth_skin` → 커브·색. **배경 흐림은 기본 순서에 없음** (필요하면 맨 마지막에 따로)
 
 실제 학사모 사진 한 장으로 검증: 모자 +2.7° → 수평, 고개 +0.6° → 0.0°, 어깨선 −4.3° → +0.1°.
 모자 각도 측정은 판 중앙 60%의 윗선으로 하며 ±0.8° 정도 오차가 있습니다.
