@@ -635,9 +635,14 @@ class Session:
         m = m * m * (3 - 2 * m)
         return (slice(Y0, Y1), slice(X0, X1)), m[..., None]
 
-    def edit_dodge_burn(self, x, y, radius, amount, feather=0.6):
-        """Local lighten (amount > 0) or darken (< 0) with a soft round brush."""
+    def edit_dodge_burn(self, x, y, radius, amount, feather=0.6, only='all'):
+        """Local lighten (amount > 0) or darken (< 0) with a soft round brush.
+        only='background' lights the backdrop behind the person (studio glow),
+        only='person' keeps the brush off the backdrop."""
         sl, m = self._soft_disc(x, y, radius, feather)
+        if only in ('background', 'person'):
+            pm = self.person_mask()[sl][..., None]
+            m = m * (pm if only == 'person' else 1 - pm)
         roi = self.base[sl].astype(np.float32) / 255
         a = float(np.clip(amount, -1, 1))
         # gamma-space nudge that protects the extremes, like Photoshop's midtones mode
@@ -1011,7 +1016,7 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
                 self.edit_hsl(inp['ranges'])
                 return 'HSL 적용', self.render()
             if name == 'dodge_burn':
-                self.edit_dodge_burn(inp['x'], inp['y'], inp.get('radius', 0.08), inp['amount'], inp.get('feather', 0.6))
+                self.edit_dodge_burn(inp['x'], inp['y'], inp.get('radius', 0.08), inp['amount'], inp.get('feather', 0.6), inp.get('only', 'all'))
                 return '닷지/번 적용', self.render()
             if name == 'clone':
                 self.edit_clone(inp['from_x'], inp['from_y'], inp['to_x'], inp['to_y'], inp.get('radius', 0.03), inp.get('seamless', True))
@@ -1079,8 +1084,8 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {k: PT for k in ('rgb', 'red', 'green', 'blue')}}},
     {'name': 'hsl', 'description': 'Camera Raw HSL. 색 범위(red orange yellow green aqua blue purple magenta)별로 hue(도, ±30 정도) · saturation(-100~100) · luminance(-100~100). 피부는 orange, 하늘은 blue/aqua.',
      'input_schema': {'type': 'object', 'properties': {'ranges': {'type': 'object', 'additionalProperties': {'type': 'object', 'properties': {'hue': {'type': 'number'}, 'saturation': {'type': 'number'}, 'luminance': {'type': 'number'}}}}}, 'required': ['ranges']}},
-    {'name': 'dodge_burn', 'description': '둥근 브러시로 국소 밝기 조정. amount > 0 닷지(밝게), < 0 번(어둡게), -1~1. radius 는 폭 대비 비율(기본 0.08).',
-     'input_schema': {'type': 'object', 'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}, 'radius': {'type': 'number'}, 'amount': {'type': 'number'}, 'feather': {'type': 'number'}}, 'required': ['x', 'y', 'amount']}},
+    {'name': 'dodge_burn', 'description': '둥근 브러시로 국소 밝기 조정. amount > 0 닷지(밝게), < 0 번(어둡게), -1~1. radius 는 폭 대비 비율(기본 0.08). only=background 면 인물 뒤 배경만 밝힌다(스튜디오 배경 글로우: 머리 뒤에 radius 0.5, amount 0.5 정도), only=person 은 인물만.',
+     'input_schema': {'type': 'object', 'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}, 'radius': {'type': 'number'}, 'amount': {'type': 'number'}, 'feather': {'type': 'number'}, 'only': {'type': 'string', 'enum': ['all', 'background', 'person']}}, 'required': ['x', 'y', 'amount']}},
     {'name': 'clone', 'description': '도장 툴. (from) 위치의 둥근 조각을 (to) 위치에 붙인다. 잡티보다 큰 것(머리카락 한 가닥, 벽의 얼룩)에. seamless=true 면 색을 주변에 맞춤.',
      'input_schema': {'type': 'object', 'properties': {'from_x': {'type': 'number'}, 'from_y': {'type': 'number'}, 'to_x': {'type': 'number'}, 'to_y': {'type': 'number'}, 'radius': {'type': 'number'}, 'seamless': {'type': 'boolean'}}, 'required': ['from_x', 'from_y', 'to_x', 'to_y']}},
     {'name': 'vignette', 'description': '비네팅. amount -1~1 (음수 = 모서리 어둡게, 보통 -0.3~-0.5), midpoint 0~1, feather 0~1.',
