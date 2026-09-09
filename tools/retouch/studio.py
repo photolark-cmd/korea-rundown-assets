@@ -333,6 +333,82 @@ class Session:
 
     STABLE = [6, 168, 197, 195, 33, 133, 362, 263, 70, 105, 107, 336, 334, 300, 234, 454]
 
+    # Expression warp: which landmarks move, and how much of the full move each
+    # takes (Photoshop's face-aware "smile" works the same way — corners up and
+    # out, cheeks up, and the strip of lip next to the corner follows).
+    LIP_OUTER = {61: 1.0, 146: 0.6, 185: 0.6, 91: 0.3, 40: 0.3, 181: 0.1, 39: 0.1,
+                 291: 1.0, 375: 0.6, 409: 0.6, 321: 0.3, 270: 0.3, 405: 0.1, 269: 0.1}
+    LIP_INNER = {78: 1.0, 95: 0.6, 191: 0.6, 88: 0.3, 80: 0.3, 308: 1.0, 324: 0.6, 415: 0.6, 318: 0.3, 310: 0.3}
+    CHEEKS = [50, 101, 118, 117, 123, 205, 206, 280, 330, 347, 346, 352, 425, 426]
+    BROW_INNER = [107, 55, 65, 66, 336, 285, 295, 296]
+    BROW_OUTER = [70, 63, 105, 300, 293, 334]
+
+    def edit_expression(self, smile=0.0, relax_brow=0.0):
+        """Geometric expression change: a slight smile and/or un-furrowed brows.
+        Moves landmarks in face-width units and warps the crop to follow."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        smile, relax_brow = float(np.clip(smile, -1, 1)), float(np.clip(relax_brow, 0, 1))
+        from retouch import paste_back, paste_mask
+        face_size = 1024
+        M, side = C.crop_transform(pts, face_size)
+        crop = cv2.warpAffine(self.base, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        pc = C.apply_affine(M, pts)
+        _, fw, _ = C.face_frame(pc)
+        d = np.zeros_like(pc)
+        mouth_cx = (pc[61, 0] + pc[291, 0]) / 2
+        if smile:
+            for group, k in ((self.LIP_OUTER, 1.0), (self.LIP_INNER, 0.9)):
+                for i, w in group.items():
+                    out = 1.0 if pc[i, 0] > mouth_cx else -1.0
+                    d[i] += (out * 0.018 * w * k * smile * fw, -0.032 * w * k * smile * fw)
+            for i in self.CHEEKS:
+                out = 1.0 if pc[i, 0] > mouth_cx else -1.0
+                d[i] += (out * 0.004 * smile * fw, -0.012 * smile * fw)
+        if relax_brow:
+            for i in self.BROW_INNER:
+                out = 1.0 if pc[i, 0] > mouth_cx else -1.0
+                d[i] += (out * 0.008 * relax_brow * fw, -0.018 * relax_brow * fw)
+            for i in self.BROW_OUTER:
+                d[i] += (0.0, -0.008 * relax_brow * fw)
+        target = pc + d
+        anchors = C.anchor_points(pc, side)
+        warped = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
+        self.snapshot(f'표정 미소{smile:+.1f} 눈썹{relax_brow:.1f}')
+        self.base = paste_back(self.base, warped, M, paste_mask(pc, side, face_size))
+        self.pts_checked = False
+
+    MOUTH_STABLE = [6, 168, 197, 195, 5, 4, 1, 33, 133, 362, 263, 234, 454, 93, 323]
+
+    def edit_mouth_from(self, donor_name):
+        """Take the mouth from another photo of the same person — the only way
+        to get real teeth into a closed-mouth shot. Aligns on nose, cheeks and
+        eye corners (things a smile does not move) and blends the mouth region."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        if not self.args.folder:
+            raise ValueError('--folder 없이 시작해서 다른 사진을 열 수 없습니다')
+        donor = C.imread(os.path.join(self.args.folder, os.path.basename(donor_name)))
+        dpts = self._lm.detect(donor)
+        if dpts is None:
+            raise ValueError(f'{donor_name} 에서 얼굴을 찾지 못했습니다')
+        A, _ = cv2.estimateAffinePartial2D(dpts[self.MOUTH_STABLE], pts[self.MOUTH_STABLE], method=cv2.LMEDS)
+        if A is None:
+            raise ValueError('두 사진의 얼굴을 맞추지 못했습니다')
+        h, w = self.base.shape[:2]
+        aligned = cv2.warpAffine(donor, A, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        _, fw, _ = C.face_frame(pts)
+        lips = C.apply_affine(A, dpts[C.LIPS])                  # the donor mouth, where it lands
+        mask = np.zeros((h, w), np.uint8)
+        cv2.fillConvexPoly(mask, cv2.convexHull(np.round(lips).astype(np.int32)), 255)
+        mask = cv2.dilate(mask, C._disc(0.07 * fw))
+        centre = lips.mean(0)
+        self.snapshot(f'입 ← {donor_name}')
+        self.base = cv2.seamlessClone(aligned, self.base, mask, (int(centre[0]), int(centre[1])), cv2.NORMAL_CLONE)
+        self.pts_checked = False
+
     def edit_eyes_from(self, donor_name, which='both'):
         """Take the eyes from another photo of the same person (same session,
         similar angle), align them on the stable landmarks around the eyes and
@@ -486,6 +562,7 @@ smooth_skin 은 얼굴 피부만 부드럽게(0~1). face_models 는 사용자의
 crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)은 save 의 size 로 처리되며 가운데 기준으로 잘립니다.
 
 기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
+표정: 살짝 미소·인상 풀기는 expression(워핑). 이가 보이는 활짝 웃음은 워핑으로 안 되고 mouth_from 으로 같은 사람의 웃는 컷에서 입을 가져오는 방법뿐입니다. 없는 이를 만들어내지는 못한다고 분명히 말하세요. 표정을 바꾼 뒤엔 미리보기를 보고 부자연스러우면 강도를 낮추거나 undo 합니다.
 저장(save)은 사용자가 저장하라고 할 때만 합니다. 되돌리기는 undo. 요청이 애매하면 한 줄로 되묻습니다. 사진 속 인물에 대한 평가는 하지 않습니다."""
 
     def run_tool(self, name, inp):
@@ -546,6 +623,12 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'eyes_from':
                 self.edit_eyes_from(inp['donor'], inp.get('which', 'both'))
                 return f"{inp['donor']} 의 눈을 옮겨 붙였습니다", self.render()
+            if name == 'expression':
+                self.edit_expression(float(inp.get('smile', 0)), float(inp.get('relax_brow', 0)))
+                return '표정 워핑 적용', self.render()
+            if name == 'mouth_from':
+                self.edit_mouth_from(inp['donor'])
+                return f"{inp['donor']} 의 입을 옮겨 붙였습니다", self.render()
             if name == 'undo':
                 label = self.undo()
                 return (f'되돌림: {label}' if label else '되돌릴 것이 없음'), self.render()
@@ -582,6 +665,10 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
     {'name': 'eyes_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 눈을 가져와 붙인다. 눈 감은 사진 구제용. 같은 촬영·비슷한 각도의 사진이어야 한다. which: both | left | right.',
      'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}, 'which': {'type': 'string', 'enum': ['both', 'left', 'right']}}, 'required': ['donor']}},
+    {'name': 'expression', 'description': '표정을 워핑으로 바꾼다(픽셀을 새로 만들지 않음). smile -1~1: 입꼬리·볼을 올려 살짝 미소(0.3 은은, 0.6 분명, 1 최대 — 그 이상은 부자연). relax_brow 0~1: 찌푸린 눈썹 사이를 벌리고 올려 인상을 푼다. 입을 벌리거나 이를 보이게는 못 한다.',
+     'input_schema': {'type': 'object', 'properties': {'smile': {'type': 'number', 'minimum': -1, 'maximum': 1}, 'relax_brow': {'type': 'number', 'minimum': 0, 'maximum': 1}}}},
+    {'name': 'mouth_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 입을 가져와 붙인다. 이 보이는 웃음은 이 방법뿐(진짜 이가 필요). 같은 촬영·비슷한 각도여야 하고, 볼·눈은 안 바뀌므로 자연스러운지 결과를 꼭 확인할 것.',
+     'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}}, 'required': ['donor']}},
     {'name': 'undo', 'description': '마지막 수정을 되돌린다.', 'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'save', 'description': '결과를 저장한다. size: orig | 1600 (가로 1600) | 1200x630 (영문 썸네일) | 1080x1080 (국내 썸네일).',
      'input_schema': {'type': 'object', 'properties': {'size': {'type': 'string', 'enum': list(SIZES)}, 'name': {'type': 'string'}}}},
