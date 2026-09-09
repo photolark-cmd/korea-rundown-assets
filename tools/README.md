@@ -8,6 +8,8 @@ CSV 한 줄 = PNG 한 장. 도구는 두 개입니다.
 | `render-figures.mjs` | **본문용 차트·숫자 카드** | `figure-template.html` |
 | `build-post.mjs` | **초고 → 발행 형식 변환** (`post.html` + `meta.json`) | — |
 | `grab-frames.mjs` | **편집 영상에서 본문 이미지 추출** | — |
+| `photo-fix/index.html` | **사진 보정** (원본 ↔ 보정본 비교, 브라우저에서 실행) | — |
+| `learn-preset.mjs` | **before/after 쌍에서 보정 프리셋 학습** | — |
 
 디자인은 전부 템플릿에 있고, 스크립트는 값을 채워 넣고 크기를 맞춘 뒤 캡처만 합니다.
 아래 **폰트** 절은 두 도구에 공통으로 적용됩니다.
@@ -313,3 +315,17 @@ node tools/build-post.mjs drafts/<파일>.md --youtube "https://www.youtube.com/
 - 영상이 실제로 올라온 뒤에 붙이세요. 없는 영상을 임베드하면 나중에 고치는 품이 더 듭니다
 
 특정 장면부터 재생시키려면 임베드 주소 끝에 `?start=107`(초)을 붙이면 됩니다.
+
+## 사진 보정 (`photo-fix/`)
+
+촬영한 사진을 왼쪽 원본 / 오른쪽 보정본으로 비교하며 고칩니다.
+설치 없이 `tools/photo-fix/index.html`을 브라우저에서 열면 바로 씁니다
+(사진은 업로드되지 않고 브라우저 안에서만 처리됩니다).
+
+직접 보정한 before/after 쌍을 주면 그 보정 방식을 프리셋으로 뽑아냅니다.
+
+```bash
+node tools/learn-preset.mjs <before-after-폴더> --name "야간 편의점"
+```
+
+자세한 내용: [`photo-fix/README.md`](photo-fix/README.md)

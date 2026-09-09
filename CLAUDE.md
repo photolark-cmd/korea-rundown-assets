@@ -70,7 +70,12 @@ node tools/render-thumbnails.mjs --profile us|kr|us,kr          # 글 대표 썸
 node tools/render-figures.mjs                                   # 본문 차트·숫자 카드
 node tools/grab-frames.mjs <영상> --sheet | --at 0:12,1:47      # 편집 영상에서 본문 이미지
 node tools/build-post.mjs drafts/<파일>.md --youtube <url>      # 발행 형식 변환 + 영상 임베드
+node tools/learn-preset.mjs <before-after 폴더> --name "이름"   # 보정 프리셋 학습
 ```
+
+**촬영한 사진 보정은 `tools/photo-fix/index.html`을 브라우저에서 연다.** 설치 불필요,
+왼쪽 원본 / 오른쪽 보정본. 사용자가 직접 보정한 before/after 쌍을 주면
+`learn-preset.mjs`가 그 보정 방식을 프리셋으로 뽑아 앱에 넣는다.
 
 **본문이 밋밋할 때는 편집 영상에서 프레임을 뽑는다.** 이미 자막·그래픽이 들어가 있어
 새로 만들 필요가 없고, 사용자가 촬영하러 나갈 필요도 없다. 채널 영상 소스는 사용자 PC에 있다

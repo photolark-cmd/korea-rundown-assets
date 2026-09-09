@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>사진 보정 — Korea Rundown</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f25;
+    --line: #2c313a;
+    --text: #e6e8ec;
+    --muted: #969db0;
+    --accent: #5aa9ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  button, select, label.file {
+    background: #262b33;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 11px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover, label.file:hover { border-color: #3d4553; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=file] { display: none; }
+  .spacer { flex: 1; }
+  .chip { color: var(--muted); font-size: 12px; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .stage {
+    flex: 1;
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    min-width: 0;
+    align-items: stretch;
+  }
+  figure {
+    flex: 1;
+    margin: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  figcaption { color: var(--muted); font-size: 12px; text-align: center; }
+  .frame {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0e1013;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  canvas { max-width: 100%; max-height: 100%; display: block; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 13px; }
+
+  aside {
+    width: 260px;
+    flex: none;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding: 12px 14px;
+    overflow-y: auto;
+  }
+  .ctl { margin-bottom: 12px; }
+  .ctl .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .ctl .row b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
+  h2 { font-size: 12px; color: var(--muted); margin: 18px 0 8px; text-transform: none; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+
+  .strip {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    overflow-x: auto;
+    min-height: 68px;
+  }
+  .strip img {
+    height: 50px;
+    border-radius: 4px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    flex: none;
+  }
+  .strip img.on { border-color: var(--accent); }
+  body.drag { outline: 3px solid var(--accent); outline-offset: -3px; }
+  @media (max-width: 900px) {
+    main { flex-direction: column; }
+    aside { width: auto; border-left: none; border-top: 1px solid var(--line); max-height: 40vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>사진 보정</h1>
+  <label class="file">사진 열기<input id="pick" type="file" accept="image/*" multiple></label>
+  <select id="preset" title="프리셋"></select>
+  <button id="auto">자동 보정</button>
+  <button id="reset">초기화</button>
+  <span class="chip" id="status">사진을 열거나 창에 끌어다 놓으세요</span>
+  <span class="spacer"></span>
+  <select id="size" title="저장 크기">
+    <option value="orig">원본 크기</option>
+    <option value="1600x">가로 1600 (본문용)</option>
+    <option value="1200x630">1200×630 (영문 썸네일)</option>
+    <option value="1080x1080">1080×1080 (국내 썸네일)</option>
+  </select>
+  <button id="save" class="primary" disabled>저장</button>
+  <button id="saveAll" disabled>전체 저장</button>
+</header>
+
+<main>
+  <div class="stage">
+    <figure>
+      <figcaption>원본</figcaption>
+      <div class="frame"><canvas id="cvA"></canvas><div class="empty" id="hint">JPG · PNG 파일을 열면<br>여기 원본이, 오른쪽에 보정본이 나옵니다</div></div>
+    </figure>
+    <figure>
+      <figcaption>보정</figcaption>
+      <div class="frame"><canvas id="cvB"></canvas></div>
+    </figure>
+  </div>
+  <aside id="panel"></aside>
+</main>
+
+<div class="strip" id="strip"></div>
+
+<script src="presets.js" onerror="void 0"></script>
+<script>
+"use strict";
+
+/* ---------- adjustment model ---------- */
+
+const SLIDERS = [
+  { key: 'exposure',   label: '노출',       min: -2,   max: 2,   step: 0.01, def: 0, fmt: v => (v > 0 ? '+' : '') + v.toFixed(2) },
+  { key: 'contrast',   label: '대비',       min: 0.5,  max: 2,   step: 0.01, def: 1, fmt: v => v.toFixed(2) },
+  { key: 'highlights', label: '밝은 영역',  min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'shadows',    label: '어두운 영역',min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'temp',       label: '색온도',     min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'tint',       label: '색조',       min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'saturation', label: '채도',       min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'vibrance',   label: '생동감',     min: -100, max: 100, step: 1,    def: 0 },
+  { key: 'sharpen',    label: '선명도',     min: 0,    max: 100, step: 1,    def: 0 },
+];
+
+const DEFAULTS = Object.fromEntries(SLIDERS.map(s => [s.key, s.def]));
+
+/* Hand-tuned starting points. Learned presets (presets.js) carry a `lut`
+   instead: a 256-entry map per channel measured from before/after pairs. */
+const BUILT_IN = [
+  { id: 'none', name: '프리셋 없음', params: {} },
+  { id: 'cvs-night', name: '편의점 · 형광등', params: { exposure: 0.15, contrast: 1.06, shadows: 25, highlights: -20, temp: -12, tint: -6, vibrance: 18 } },
+  { id: 'street-night', name: '야간 거리 · 나트륨등', params: { exposure: 0.2, contrast: 1.1, shadows: 30, highlights: -25, temp: -26, tint: 4, vibrance: 12 } },
+  { id: 'food', name: '음식 클로즈업', params: { exposure: 0.1, contrast: 1.08, shadows: 12, highlights: -10, saturation: 8, vibrance: 14, sharpen: 35 } },
+  { id: 'sign', name: '간판 · 가격표 (글자 선명하게)', params: { contrast: 1.25, shadows: 8, highlights: -8, saturation: -18, sharpen: 45 } },
+];
+
+const PRESETS = BUILT_IN.concat(window.LEARNED_PRESETS || []);
+
+const PREVIEW_MAX = 1400;   // long edge used for the interactive preview
+const AUTO_CLIP = 0.005;    // percentile trimmed off each end by 자동 보정
+const AUTO_WB = 0.7;        // how far auto levels go per-channel (1 = full colour cast removal)
+
+const state = { shots: [], i: -1, params: { ...DEFAULTS }, presetId: 'none' };
+
+/* ---------- pipeline ---------- */
+
+/* Auto levels: per-channel black/white points, pulled part-way back toward the
+   shared endpoints so a genuinely red scene doesn't get neutralised. */
+function computeAutoLut(data) {
+  const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  for (let i = 0; i < data.length; i += 4) {
+    hist[0][data[i]]++; hist[1][data[i + 1]]++; hist[2][data[i + 2]]++;
+  }
+  const total = data.length / 4;
+  const cut = Math.max(1, Math.round(total * AUTO_CLIP));
+  const lo = [], hi = [];
+  for (let c = 0; c < 3; c++) {
+    let acc = 0, l = 0, h = 255;
+    for (let v = 0; v < 256; v++) { acc += hist[c][v]; if (acc >= cut) { l = v; break; } }
+    acc = 0;
+    for (let v = 255; v >= 0; v--) { acc += hist[c][v]; if (acc >= cut) { h = v; break; } }
+    lo.push(l); hi.push(h);
+  }
+  const loAvg = (lo[0] + lo[1] + lo[2]) / 3, hiAvg = (hi[0] + hi[1] + hi[2]) / 3;
+  const lut = [];
+  for (let c = 0; c < 3; c++) {
+    const l = lo[c] * AUTO_WB + loAvg * (1 - AUTO_WB);
+    const h = hi[c] * AUTO_WB + hiAvg * (1 - AUTO_WB);
+    const t = new Uint8ClampedArray(256);
+    const span = h - l;
+    for (let v = 0; v < 256; v++) t[v] = span < 16 ? v : ((v - l) * 255) / span;
+    lut.push(t);
+  }
+  return lut;
+}
+
+/* Everything that is a pure per-channel point operation folds into one table:
+   auto levels -> learned preset -> white balance -> exposure -> contrast. */
+function buildLut(p, presetLut, autoLut) {
+  const wb = [1 + p.temp / 300, 1 - p.tint / 400, 1 - p.temp / 300];
+  const ev = Math.pow(2, p.exposure);
+  const out = [];
+  for (let c = 0; c < 3; c++) {
+    const t = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) {
+      let v = autoLut ? autoLut[c][i] / 255 : i / 255;
+      if (presetLut) v = presetLut[c][Math.round(v * 255)] / 255;
+      v = Math.max(0, v * wb[c]);
+      if (ev !== 1) v = Math.pow(Math.pow(v, 2.2) * ev, 1 / 2.2);
+      if (p.contrast !== 1) v = (v - 0.5) * p.contrast + 0.5;
+      t[i] = v * 255;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+function apply(src, dst, p, lut) {
+  const [lr, lg, lb] = lut;
+  const sh = p.shadows / 100, hi = p.highlights / 100;
+  const sat = p.saturation / 100, vib = p.vibrance / 100;
+  const s = src.data, d = dst.data;
+  for (let i = 0; i < s.length; i += 4) {
+    let r = lr[s[i]] / 255, g = lg[s[i + 1]] / 255, b = lb[s[i + 2]] / 255;
+
+    if (sh || hi) {
+      const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      if (sh) {
+        const m = Math.pow(1 - L, 2.5), add = sh * 0.10 * m, mul = 1 + sh * 0.6 * m;
+        r = (r + add) * mul; g = (g + add) * mul; b = (b + add) * mul;
+      }
+      if (hi) {
+        const m = Math.pow(L, 2.5), mul = 1 + hi * 0.7 * m;
+        r *= mul; g *= mul; b *= mul;
+      }
+    }
+
+    if (sat || vib) {
+      let k = 1 + sat;
+      if (vib) {
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        k += vib * (1 - (mx > 0.004 ? (mx - mn) / mx : 0));
+      }
+      if (k !== 1) {
+        const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = L + (r - L) * k; g = L + (g - L) * k; b = L + (b - L) * k;
+      }
+    }
+
+    d[i] = r * 255; d[i + 1] = g * 255; d[i + 2] = b * 255; d[i + 3] = s[i + 3];
+  }
+  if (p.sharpen > 0) unsharp(dst, p.sharpen / 100);
+}
+
+/* Unsharp mask with a separable 1-2-1 blur. */
+function unsharp(img, amount) {
+  const { width: w, height: h, data: d } = img;
+  const tmp = new Float32Array(w * h * 3);
+  const blur = new Float32Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 3, p = (y * w + x) * 4;
+      const xm = (y * w + Math.max(0, x - 1)) * 4, xp = (y * w + Math.min(w - 1, x + 1)) * 4;
+      for (let c = 0; c < 3; c++) tmp[o + c] = (d[xm + c] + 2 * d[p + c] + d[xp + c]) / 4;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    const ym = Math.max(0, y - 1) * w, yp = Math.min(h - 1, y + 1) * w;
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 3;
+      for (let c = 0; c < 3; c++) blur[o + c] = (tmp[(ym + x) * 3 + c] + 2 * tmp[o + c] + tmp[(yp + x) * 3 + c]) / 4;
+    }
+  }
+  for (let i = 0, o = 0; i < d.length; i += 4, o += 3) {
+    for (let c = 0; c < 3; c++) d[i + c] = d[i + c] + amount * 1.5 * (d[i + c] - blur[o + c]);
+  }
+}
+
+/* ---------- loading ---------- */
+
+function fitted(w, h, max) {
+  const k = Math.min(1, max / Math.max(w, h));
+  return [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+}
+
+function drawToData(bitmap, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return { data: ctx.getImageData(0, 0, w, h), canvas: c };
+}
+
+async function addFiles(files) {
+  const list = [...files].filter(f => /^image\//.test(f.type));
+  if (!list.length) return;
+  setStatus('불러오는 중…');
+  for (const file of list) {
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch (e) {
+      setStatus(file.name + ' — 열 수 없는 형식입니다');
+      continue;
+    }
+    const w = bitmap.width, h = bitmap.height;
+    const [pw, ph] = fitted(w, h, PREVIEW_MAX);
+    const preview = drawToData(bitmap, pw, ph).data;
+    const [tw, th] = fitted(w, h, 120);
+    const thumb = drawToData(bitmap, tw, th).canvas.toDataURL('image/jpeg', 0.7);
+    bitmap.close();
+    state.shots.push({
+      file, name: file.name, w, h,
+      preview, thumb, autoLut: null,
+      out: new ImageData(pw, ph),
+    });
+  }
+  if (state.i < 0 && state.shots.length) select(0);
+  else drawStrip();
+  setStatus('');
+}
+
+function select(i) {
+  state.i = i;
+  document.getElementById('hint').style.display = 'none';
+  const shot = state.shots[i];
+  const cvA = document.getElementById('cvA');
+  cvA.width = shot.preview.width; cvA.height = shot.preview.height;
+  cvA.getContext('2d').putImageData(shot.preview, 0, 0);
+  const cvB = document.getElementById('cvB');
+  cvB.width = shot.preview.width; cvB.height = shot.preview.height;
+  drawStrip();
+  render();
+}
+
+function drawStrip() {
+  const strip = document.getElementById('strip');
+  strip.innerHTML = '';
+  state.shots.forEach((s, i) => {
+    const img = new Image();
+    img.src = s.thumb;
+    img.title = s.name;
+    if (i === state.i) img.className = 'on';
+    img.onclick = () => select(i);
+    strip.appendChild(img);
+  });
+}
+
+/* ---------- rendering ---------- */
+
+let pending = false;
+function render() {
+  if (state.i < 0 || pending) return;
+  pending = true;
+  requestAnimationFrame(() => {
+    pending = false;
+    const shot = state.shots[state.i];
+    const lut = buildLut(state.params, currentPresetLut(), shot.autoLut);
+    apply(shot.preview, shot.out, state.params, lut);
+    document.getElementById('cvB').getContext('2d').putImageData(shot.out, 0, 0);
+  });
+}
+
+function currentPresetLut() {
+  const p = PRESETS.find(x => x.id === state.presetId);
+  return p && p.lut ? p.lut : null;
+}
+
+/* ---------- saving ---------- */
+
+const SIZES = {
+  'orig': null,
+  '1600x': { long: 1600 },
+  '1200x630': { w: 1200, h: 630 },
+  '1080x1080': { w: 1080, h: 1080 },
+};
+
+async function exportShot(shot) {
+  const bitmap = await createImageBitmap(shot.file, { imageOrientation: 'from-image' });
+  const full = drawToData(bitmap, bitmap.width, bitmap.height);
+  bitmap.close();
+  const out = new ImageData(full.data.width, full.data.height);
+  apply(full.data, out, state.params, buildLut(state.params, currentPresetLut(), shot.autoLut));
+  full.canvas.getContext('2d').putImageData(out, 0, 0);
+
+  const spec = SIZES[document.getElementById('size').value];
+  let canvas = full.canvas;
+  if (spec) {
+    const sw = canvas.width, sh = canvas.height;
+    let tw, th;
+    if (spec.long) [tw, th] = fitted(sw, sh, spec.long);
+    else { tw = spec.w; th = spec.h; }
+    const dst = document.createElement('canvas');
+    dst.width = tw; dst.height = th;
+    const k = Math.max(tw / sw, th / sh);          // cover crop, centred
+    const cw = tw / k, ch = th / k;
+    dst.getContext('2d').drawImage(canvas, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, tw, th);
+    canvas = dst;
+  }
+  const base = shot.name.replace(/\.[^.]+$/, '');
+  await new Promise(res => canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = base + '-fix.jpg';
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); res(); }, 400);
+  }, 'image/jpeg', 0.92));
+}
+
+/* ---------- UI ---------- */
+
+function setStatus(msg) {
+  const bits = [];
+  if (msg) bits.push(msg);
+  else if (state.i >= 0) {
+    const s = state.shots[state.i];
+    bits.push(s.name + ' · ' + s.w + '×' + s.h);
+    if (s.autoLut) bits.push('자동 보정 적용됨');
+  } else bits.push('사진을 열거나 창에 끌어다 놓으세요');
+  document.getElementById('status').textContent = bits.join(' · ');
+  const has = state.i >= 0;
+  document.getElementById('save').disabled = !has;
+  document.getElementById('saveAll').disabled = state.shots.length < 2;
+}
+
+function buildPanel() {
+  const panel = document.getElementById('panel');
+  const h = document.createElement('h2');
+  h.textContent = '보정값';
+  panel.appendChild(h);
+  for (const s of SLIDERS) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ctl';
+    wrap.innerHTML =
+      '<div class="row"><span>' + s.label + '</span><b id="v-' + s.key + '"></b></div>' +
+      '<input type="range" id="r-' + s.key + '" min="' + s.min + '" max="' + s.max + '" step="' + s.step + '">';
+    panel.appendChild(wrap);
+    const input = wrap.querySelector('input');
+    input.addEventListener('input', () => {
+      state.params[s.key] = parseFloat(input.value);
+      syncValue(s);
+      render();
+    });
+    input.addEventListener('dblclick', () => {
+      state.params[s.key] = s.def;
+      syncPanel();
+      render();
+    });
+  }
+  const note = document.createElement('div');
+  note.className = 'chip';
+  note.textContent = '슬라이더를 더블클릭하면 그 항목만 초기화됩니다.';
+  panel.appendChild(note);
+}
+
+function syncValue(s) {
+  const v = state.params[s.key];
+  document.getElementById('v-' + s.key).textContent = s.fmt ? s.fmt(v) : (v > 0 ? '+' + v : String(v));
+  document.getElementById('r-' + s.key).value = v;
+}
+
+function syncPanel() { SLIDERS.forEach(syncValue); }
+
+function applyPreset(id) {
+  state.presetId = id;
+  const p = PRESETS.find(x => x.id === id);
+  state.params = { ...DEFAULTS, ...(p && p.params ? p.params : {}) };
+  syncPanel();
+  render();
+}
+
+function init() {
+  const sel = document.getElementById('preset');
+  for (const p of PRESETS) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => applyPreset(sel.value));
+
+  buildPanel();
+  syncPanel();
+
+  document.getElementById('pick').addEventListener('change', e => addFiles(e.target.files));
+  document.getElementById('reset').addEventListener('click', () => {
+    if (state.i >= 0) state.shots[state.i].autoLut = null;
+    applyPreset(state.presetId);
+    setStatus('');
+  });
+  document.getElementById('auto').addEventListener('click', () => {
+    if (state.i < 0) return;
+    const shot = state.shots[state.i];
+    shot.autoLut = shot.autoLut ? null : computeAutoLut(shot.preview.data);
+    setStatus('');
+    render();
+  });
+  document.getElementById('save').addEventListener('click', async () => {
+    setStatus('저장 중…');
+    await exportShot(state.shots[state.i]);
+    setStatus('');
+  });
+  document.getElementById('saveAll').addEventListener('click', async () => {
+    for (let i = 0; i < state.shots.length; i++) {
+      setStatus('저장 중… (' + (i + 1) + '/' + state.shots.length + ')');
+      await exportShot(state.shots[i]);
+    }
+    setStatus('');
+  });
+
+  addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+  addEventListener('dragleave', () => document.body.classList.remove('drag'));
+  addEventListener('drop', e => {
+    e.preventDefault();
+    document.body.classList.remove('drag');
+    addFiles(e.dataTransfer.files);
+  });
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || !state.shots.length) return;
+    if (e.key === 'ArrowLeft' && state.i > 0) select(state.i - 1);
+    if (e.key === 'ArrowRight' && state.i < state.shots.length - 1) select(state.i + 1);
+  });
+
+  setStatus('');
+}
+
+init();
+</script>
+</body>
+</html>
