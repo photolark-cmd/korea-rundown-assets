@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보정 스튜디오 — Korea Rundown</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f25; --line:#2c313a; --text:#e6e8ec; --muted:#969db0; --accent:#5aa9ff; --me:#243247; --ai:#22262e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  h1 { font-size:15px; margin:0 8px 0 0; font-weight:600; }
+  button, select, label.file { background:#262b33; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 11px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#0b1220; font-weight:600; }
+  button:disabled { opacity:.4; cursor:default; }
+  input[type=file] { display:none; }
+  .spacer { flex:1; }
+  .chip { color:var(--muted); font-size:12px; }
+  main { flex:1; display:flex; min-height:0; }
+  .stage { flex:1; display:flex; gap:10px; padding:12px; min-width:0; }
+  figure { flex:1; margin:0; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  figcaption { color:var(--muted); font-size:12px; text-align:center; }
+  .frame { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#0e1013; border:1px solid var(--line); border-radius:8px; overflow:hidden; position:relative; }
+  .frame img { max-width:100%; max-height:100%; display:block; }
+  .empty { color:var(--muted); text-align:center; padding:40px 20px; font-size:13px; }
+  aside { width:360px; flex:none; border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+  .chat { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 11px; border-radius:10px; white-space:pre-wrap; max-width:95%; line-height:1.45; }
+  .msg.me { background:var(--me); align-self:flex-end; }
+  .msg.ai { background:var(--ai); align-self:flex-start; }
+  .msg.sys { color:var(--muted); font-size:12px; align-self:center; text-align:center; }
+  .ev { color:var(--muted); font-size:11px; font-family:ui-monospace,monospace; align-self:flex-start; padding-left:6px; }
+  .compose { display:flex; gap:6px; padding:10px 12px; border-top:1px solid var(--line); }
+  textarea { flex:1; resize:none; height:60px; background:#0e1013; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+  details { border-top:1px solid var(--line); padding:8px 12px; max-height:45%; overflow-y:auto; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; font-weight:600; }
+  .ctl { margin:8px 0; }
+  .ctl .row { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); }
+  .ctl .row b { color:var(--text); font-weight:500; font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--accent); margin:2px 0 0; }
+  .strip { flex:none; display:flex; gap:8px; padding:8px 12px; border-top:1px solid var(--line); background:var(--panel); overflow-x:auto; min-height:68px; }
+  .strip img { height:50px; border-radius:4px; border:2px solid transparent; cursor:pointer; flex:none; }
+  .strip img.on { border-color:var(--accent); }
+  .busy { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(14,16,19,.55); color:var(--muted); font-size:13px; }
+  .busy.on { display:flex; }
+</style>
+</head>
+<body>
+<header>
+  <h1>보정 스튜디오</h1>
+  <label class="file">사진 열기<input id="pick" type="file" accept="image/*"></label>
+  <select id="preset"><option value="">프리셋 없음</option></select>
+  <button id="auto">자동 보정</button>
+  <button id="undo">되돌리기</button>
+  <span class="chip" id="status">사진을 열거나 아래 필름스트립에서 고르세요</span>
+  <span class="spacer"></span>
+  <select id="size">
+    <option value="orig">원본 크기</option>
+    <option value="1600">가로 1600 (본문용)</option>
+    <option value="1200x630">1200×630 (영문 썸네일)</option>
+    <option value="1080x1080">1080×1080 (국내 썸네일)</option>
+  </select>
+  <button id="save" class="primary" disabled>저장</button>
+</header>
+<main>
+  <div class="stage">
+    <figure><figcaption>원본</figcaption><div class="frame"><img id="imgA" hidden><div class="empty" id="hint">왼쪽 원본 · 오른쪽 결과<br>오른쪽 대화창에서 말로 지시하거나, 아래 슬라이더로 직접 만지세요</div></div></figure>
+    <figure><figcaption>결과</figcaption><div class="frame"><img id="imgB" hidden><div class="busy" id="busy">작업 중…</div></div></figure>
+  </div>
+  <aside>
+    <div class="chat" id="chat">
+      <div class="msg sys">여기서 Claude에게 지시합니다. 예: "코 옆 점 지워줘" · "조금 따뜻하게, 그림자 살려" · "1200×630로 저장"</div>
+    </div>
+    <div class="compose">
+      <textarea id="text" placeholder="지시를 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+      <button id="send" class="primary">보내기</button>
+    </div>
+    <details><summary>슬라이더로 직접 조정</summary><div id="panel"></div></details>
+  </aside>
+</main>
+<div class="strip" id="strip"></div>
+<script>
+"use strict";
+const SLIDERS = [
+  ['exposure','노출',-2,2,0.01], ['contrast','대비',0.5,2,0.01], ['highlights','밝은 영역',-100,100,1], ['shadows','어두운 영역',-100,100,1],
+  ['temp','색온도',-100,100,1], ['tint','색조',-100,100,1], ['saturation','채도',-100,100,1], ['vibrance','생동감',-100,100,1], ['sharpen','선명도',0,100,1]];
+const $ = id => document.getElementById(id);
+let state = {open:false}, files = [], current = null, busy = false;
+
+async function api(path, body, raw) {
+  const opt = raw ? {method:'POST', body:raw.data, headers:{'X-Filename': encodeURIComponent(raw.name)}}
+                  : {method:'POST', body: JSON.stringify(body || {}), headers:{'Content-Type':'application/json'}};
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+function setBusy(on) { busy = on; $('busy').classList.toggle('on', on); $('send').disabled = on; }
+function show(j) {
+  if (j.state) state = j.state;
+  if (j.orig) { $('imgA').src = 'data:image/jpeg;base64,' + j.orig; $('imgA').hidden = false; $('hint').hidden = true; }
+  if (j.out) { $('imgB').src = 'data:image/jpeg;base64,' + j.out; $('imgB').hidden = false; }
+  $('save').disabled = !state.open;
+  $('status').textContent = state.open ? `${state.name} · ${state.width}×${state.height}` + (state.auto ? ' · 자동 보정' : '') + (state.undo.length ? ` · 되돌리기 ${state.undo.length}` : '') : '사진을 열거나 아래 필름스트립에서 고르세요';
+  if (state.open) { for (const [k] of SLIDERS) { $('r-'+k).value = state.params[k]; $('v-'+k).textContent = fmt(k, state.params[k]); } $('preset').value = state.preset || ''; }
+  document.querySelectorAll('#strip img').forEach(im => im.classList.toggle('on', im.dataset.name === state.name));
+}
+function fmt(k, v) { v = Number(v); return k === 'exposure' ? (v > 0 ? '+' : '') + v.toFixed(2) : k === 'contrast' ? v.toFixed(2) : (v > 0 ? '+' + v : String(v)); }
+function addMsg(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('chat').appendChild(d); $('chat').scrollTop = 1e9; return d; }
+function addEvent(e) {
+  const d = document.createElement('div'); d.className = 'ev';
+  const args = Object.entries(e.input || {}).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+  d.textContent = `→ ${e.tool} ${args}` + (e.error ? `  ✗ ${e.error}` : ''); $('chat').appendChild(d);
+}
+
+async function send() {
+  const text = $('text').value.trim();
+  if (!text || busy) return;
+  if (!state.open) { addMsg('sys', '먼저 사진을 여세요'); return; }
+  $('text').value = ''; addMsg('me', text); setBusy(true);
+  const thinking = addMsg('sys', '생각 중…');
+  try {
+    const j = await api('/api/chat', {text});
+    thinking.remove();
+    (j.events || []).forEach(addEvent);
+    addMsg('ai', j.reply); show(j);
+  } catch (e) { thinking.remove(); addMsg('sys', '오류: ' + e.message); }
+  setBusy(false);
+}
+
+async function loadStrip() {
+  const j = await fetch('/api/list').then(r => r.json());
+  files = j.files || []; state = j.state;
+  for (const p of (j.presets || [])) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.name; $('preset').appendChild(o); }
+  const strip = $('strip'); strip.innerHTML = '';
+  for (const f of files) {
+    const im = new Image(); im.src = '/api/thumb?' + encodeURIComponent(f); im.title = f; im.dataset.name = f;
+    im.onclick = () => open(f); strip.appendChild(im);
+  }
+  if (!files.length) strip.innerHTML = '<span class="chip">--folder 로 시작하면 폴더의 사진이 여기 나옵니다</span>';
+}
+async function open(name) {
+  if (busy) return; setBusy(true);
+  try { show(await api('/api/open', {name})); $('chat').innerHTML = ''; addMsg('sys', name + ' 열림'); current = name; }
+  catch (e) { addMsg('sys', '오류: ' + e.message); }
+  setBusy(false);
+}
+
+function buildPanel() {
+  for (const [k, label, min, max, step] of SLIDERS) {
+    const w = document.createElement('div'); w.className = 'ctl';
+    w.innerHTML = `<div class="row"><span>${label}</span><b id="v-${k}"></b></div><input type="range" id="r-${k}" min="${min}" max="${max}" step="${step}">`;
+    $('panel').appendChild(w);
+    const inp = w.querySelector('input');
+    inp.addEventListener('input', () => { $('v-'+k).textContent = fmt(k, inp.value); });
+    inp.addEventListener('change', async () => { if (state.open) show(await api('/api/params', {params:{[k]: Number(inp.value)}})); });
+  }
+}
+
+$('pick').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return; setBusy(true);
+  try { show(await api('/api/upload', null, {name: f.name, data: await f.arrayBuffer()})); $('chat').innerHTML = ''; addMsg('sys', f.name + ' 열림'); }
+  catch (err) { addMsg('sys', '오류: ' + err.message); }
+  setBusy(false);
+});
+$('send').addEventListener('click', send);
+$('text').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+$('auto').addEventListener('click', async () => { if (state.open) show(await api('/api/params', {auto: !state.auto})); });
+$('undo').addEventListener('click', async () => { if (state.open) show(await api('/api/undo')); });
+$('preset').addEventListener('change', async () => { if (state.open) show(await api('/api/params', {preset: $('preset').value})); });
+$('save').addEventListener('click', async () => { const j = await api('/api/save', {size: $('size').value}); addMsg('sys', '저장됨: ' + j.path); });
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || !files.length) return;
+  const i = files.indexOf(state.name);
+  if (e.key === 'ArrowLeft' && i > 0) open(files[i - 1]);
+  if (e.key === 'ArrowRight' && i >= 0 && i < files.length - 1) open(files[i + 1]);
+});
+
+buildPanel();
+loadStrip();
+</script>
+</body>
+</html>

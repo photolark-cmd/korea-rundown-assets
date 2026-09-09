@@ -18,6 +18,8 @@ python -m pip install -r tools/retouch/requirements.txt
 
 ## 순서
 
+한 장씩 대화로 다듬는 방법은 아래 **`studio.py`** 절, 일괄 처리는 다음 순서입니다.
+
 ```bash
 # 1. 쌍 → 학습 데이터 (얼굴 크롭, 정렬, 마스크, 변형량)
 python tools/retouch/prepare.py pairs/ --out work/ [--preset cvs-mine]
@@ -54,6 +56,40 @@ python tools/retouch/retouch.py 촬영본/ --out 결과/ --data work/ [--preset 
 | `--preset id` | 색 프리셋 먼저 적용 (**학습 때와 같은 것**으로) |
 
 얼굴을 못 찾은 사진은 색 프리셋만 적용하고 마지막에 목록으로 알려줍니다.
+
+## 한 장씩, 말로 지시하기 (`studio.py`)
+
+일괄이 아니라 한 장을 붙잡고 다듬어야 할 때. 왼쪽 원본 / 오른쪽 결과, 오른쪽 아래에
+**Claude와의 대화창**이 있습니다. Claude는 매 턴 현재 사진을 직접 보고, 지시를 도구 호출로
+실행한 뒤 바뀐 결과를 다시 확인하고 보고합니다.
+
+```bash
+set ANTHROPIC_API_KEY=sk-ant-...        # Windows (macOS/Linux: export ...)
+python tools/retouch/studio.py --folder 촬영본/ --out 결과/ --data work/
+```
+
+브라우저가 `http://127.0.0.1:8765/` 로 열립니다. 아래 필름스트립에서 사진을 고르거나 **사진 열기**로
+업로드합니다. 슬라이더로 직접 만질 수도 있고, 대화창에 이렇게 씁니다.
+
+| 지시 예 | Claude가 하는 일 |
+|---|---|
+| "코 옆 점 지워줘" | `zoom` 으로 확대해 위치 확인 → `heal` (지정 위치 근처의 가장 잡티다운 점으로 자동 스냅) |
+| "조금 따뜻하게, 그림자 살려" | `adjust temp=+15 shadows=+20` 같은 작은 단계 |
+| "피부만 살짝" | `smooth_skin 0.3` (얼굴 마스크 안에서만) |
+| "학습한 대로 얼굴 보정, 턱은 절반만" | `face_models geom_strength=0.5 tex_strength=1` — `--data`에 모델이 있을 때 |
+| "위쪽 좀 잘라내" · "1200×630로 저장" | `crop` · `save size=1200x630` (저장은 시키기 전엔 안 함) |
+| "아까 걸로 되돌려" | `undo` |
+
+도구 호출 내역은 대화창에 회색 한 줄씩 찍혀서 무엇을 했는지 보입니다.
+
+**비용·프라이버시.** 사진 자체는 PC 안에서만 처리되고, 대화 때 긴 변 1024px로 줄인 미리보기가
+Claude API로 갑니다(도구 실행 후 확인용은 800px). 지시 한 번에 대략 사진 1~3장분 토큰이라
+**한 지시당 몇 센트** 수준입니다. 모델은 `--model`, 사고 깊이는 `--effort low|medium|high` 로 바꿉니다
+(기본 `claude-opus-5`, `medium`). 키는 `ANTHROPIC_API_KEY` 환경변수 또는 `ant auth login` 프로필을
+자동으로 읽습니다. 키가 없어도 슬라이더·프리셋·저장은 동작합니다.
+
+색 파이프라인은 `tools/photo-fix/index.html`과 같은 수식이라(`color.py`, 오차 ≤1/255)
+둘 중 어디서 맞춘 값이든 같은 결과가 납니다.
 
 ## 검수 (`review.html`)
 

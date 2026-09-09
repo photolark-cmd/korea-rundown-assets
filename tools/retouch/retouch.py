@@ -66,6 +66,53 @@ def paste_mask(pts, side, face_size):
     return m.astype(np.float32) / 255
 
 
+def paste_back(img, crop, M, mask_crop):
+    """Put a processed face crop back into the full image through the inverse affine."""
+    Minv = C.invert_affine(M)
+    h, w = img.shape[:2]
+    back = cv2.warpAffine(crop, Minv, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_TRANSPARENT, dst=img.copy())
+    mask = cv2.warpAffine(mask_crop, Minv, (w, h))[..., None]
+    return (back.astype(np.float32) * mask + img.astype(np.float32) * (1 - mask)).round().astype(np.uint8)
+
+
+class Retoucher:
+    """The learned face steps, loadable once and applied to many images."""
+
+    def __init__(self, data_dir, device=None, use_geom=True, use_tex=True):
+        self.geom = load_geom(os.path.join(data_dir, 'geom.npz')) if use_geom and os.path.exists(os.path.join(data_dir, 'geom.npz')) else None
+        self.tex = self.device = None
+        self.face_size = 1024
+        self.preset = None
+        tex_path = os.path.join(data_dir, 'tex.pt')
+        if use_tex and os.path.exists(tex_path):
+            import torch
+            self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+            self.tex, ck = load_tex(tex_path, self.device)
+            self.face_size = int(ck['face_size'])
+            self.preset = ck.get('preset')
+        elif self.geom is not None:
+            self.face_size = int(np.load(os.path.join(data_dir, 'geom.npz'))['face_size'])
+        if self.geom is None and self.tex is None:
+            raise FileNotFoundError(f'{data_dir} 에 geom.npz / tex.pt 가 없습니다')
+
+    def process(self, img, pts, geom_strength=1.0, tex_strength=1.0):
+        """img: BGR full image, pts: its landmarks. Returns the retouched image."""
+        M, side = C.crop_transform(pts, self.face_size)
+        crop = cv2.warpAffine(img, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        pc = C.apply_affine(M, pts)
+        cur = pc
+        if self.geom is not None and geom_strength:
+            _, fw, _ = C.face_frame(pc)
+            target = pc + predict_disp(self.geom, C.normalise(pc)) * fw * geom_strength
+            anchors = C.anchor_points(pc, side)
+            crop = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
+            cur = target
+        if self.tex is not None and tex_strength:
+            skin, gate = C.face_masks(cur, side, self.face_size)
+            crop = run_tex(self.tex, self.device, crop, skin, gate, tex_strength)
+        return paste_back(img, crop, M, paste_mask(cur, side, self.face_size))
+
+
 def write_with_exif(src_path, dst_path, img, quality):
     """Keep the camera EXIF but reset orientation: OpenCV already applied it."""
     C.imwrite(dst_path, img, quality)
@@ -95,17 +142,12 @@ def main():
     ap.add_argument('--quality', type=int, default=95)
     args = ap.parse_args()
 
-    geom = None if args.no_geom else load_geom(os.path.join(args.data, 'geom.npz'))
-    tex, device, face_size = None, None, None
-    if not args.no_tex:
-        import torch
-        device = torch.device(args.device or ('cuda' if torch.cuda.is_available() else 'cpu'))
-        tex, ck = load_tex(os.path.join(args.data, 'tex.pt'), device)
-        face_size = int(ck['face_size'])
-        if ck.get('preset') and not args.preset:
-            print(f'참고: 질감 모델은 --preset {ck["preset"]} 으로 학습됐습니다. 같은 프리셋을 주는 편이 맞습니다.')
-    if face_size is None:
-        face_size = int(np.load(os.path.join(args.data, 'geom.npz'))['face_size']) if geom else 1024
+    try:
+        rt = Retoucher(args.data, args.device, use_geom=not args.no_geom, use_tex=not args.no_tex)
+    except FileNotFoundError as e:
+        sys.exit(str(e))
+    if rt.preset and not args.preset:
+        print(f'참고: 질감 모델은 --preset {rt.preset} 으로 학습됐습니다. 같은 프리셋을 주는 편이 맞습니다.')
     lut = C.load_lut(args.preset, args.presets_js) if args.preset else None
 
     files = C.list_images(args.input)
@@ -128,28 +170,7 @@ def main():
             print(f'  [{n}/{len(files)}] {f}  얼굴 없음 — 색 보정만')
             continue
 
-        M, side = C.crop_transform(pts, face_size)
-        crop = cv2.warpAffine(img, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
-        pc = C.apply_affine(M, pts)
-        cur = pc
-
-        if geom is not None:
-            _, fw, _ = C.face_frame(pc)
-            target = pc + predict_disp(geom, C.normalise(pc)) * fw * args.geom_strength
-            anchors = C.anchor_points(pc, side)
-            crop = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
-            cur = target
-
-        if tex is not None:
-            skin, gate = C.face_masks(cur, side, face_size)
-            crop = run_tex(tex, device, crop, skin, gate, args.tex_strength)
-
-        # paste the crop back at full resolution, feathered
-        Minv = C.invert_affine(M)
-        h, w = img.shape[:2]
-        back = cv2.warpAffine(crop, Minv, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_TRANSPARENT, dst=img.copy())
-        mask = cv2.warpAffine(paste_mask(cur, side, face_size), Minv, (w, h))[..., None]
-        out = (back.astype(np.float32) * mask + img.astype(np.float32) * (1 - mask)).round().astype(np.uint8)
+        out = rt.process(img, pts, args.geom_strength, args.tex_strength)
         write_with_exif(src, dst, out, args.quality)
         print(f'  [{n}/{len(files)}] {f}  ({time.time() - t0:.0f}s)')
     lm.close()

@@ -335,5 +335,7 @@ node tools/learn-preset.mjs <before-after-폴더> --name "야간 편의점"
 
 원본/보정본 쌍 몇백 장으로 잡티·피부 결·얼굴형 변형까지 학습해 새 사진에 일괄 적용합니다.
 PC(GPU)에서 돌리는 Python 파이프라인이고, 검수는 `retouch/review.html`로 합니다.
+한 장씩 다듬을 때는 `python tools/retouch/studio.py` — 원본/결과 나란히 보며 **Claude에게 말로 지시**합니다
+(잡티 위치 지정, 색 조정, 크롭, 저장까지 도구로 실행; `ANTHROPIC_API_KEY` 필요).
 
 자세한 내용: [`retouch/README.md`](retouch/README.md)

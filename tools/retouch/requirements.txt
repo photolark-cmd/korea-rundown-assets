@@ -6,3 +6,4 @@ mediapipe>=0.10
 pillow
 torch
 torchvision
+anthropic
