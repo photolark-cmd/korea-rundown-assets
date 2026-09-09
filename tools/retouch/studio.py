@@ -814,23 +814,59 @@ class Session:
         self.pts_checked = False
 
     # ---- graduation-portrait checks: level hat, level shoulders
+    CLASSES = {'background': 0, 'hair': 1, 'body-skin': 2, 'face-skin': 3, 'clothes': 4, 'others': 5}
+    MULTI_URL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite'
+
+    def classes(self):
+        """Per-pixel class map (hair / skin / clothes / hats & props) at full
+        resolution, from MediaPipe's multiclass selfie segmenter."""
+        if getattr(self, '_cls_key', None) == id(self.base):
+            return self._cls
+        if getattr(self, '_mseg', None) is None:
+            import urllib.request
+            import mediapipe as mp
+            from mediapipe.tasks.python import vision
+            from mediapipe.tasks.python.core.base_options import BaseOptions
+            path = os.path.join(C.HERE, 'models', 'selfie_multiclass_256x256.tflite')
+            if not os.path.exists(path):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                urllib.request.urlretrieve(self.MULTI_URL, path)
+            self._mp = mp
+            self._mseg = vision.ImageSegmenter.create_from_options(
+                vision.ImageSegmenterOptions(base_options=BaseOptions(model_asset_path=path), output_confidence_masks=True))
+        small = downscale(self.base, 1024)
+        res = self._mseg.segment(self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB)))
+        h, w = self.base.shape[:2]
+        conf = np.stack([cv2.resize(cv2.GaussianBlur(m.numpy_view()[..., 0], (0, 0), 2), (w, h), interpolation=cv2.INTER_LINEAR)
+                         for m in res.confidence_masks], -1)
+        self._cls = conf.argmax(-1).astype(np.uint8)
+        self._cls_key = id(self.base)
+        return self._cls
+
     def _hat_mask(self):
-        """Dark region of the person above the brows: the mortarboard and cap."""
+        """The mortarboard and cap: the segmenter's 'others' class above the
+        brows; falls back to a dark region there. Must be clearly wider than
+        the face, or it is hair, not a hat."""
         pts = self.landmarks()
         if pts is None:
             raise ValueError('얼굴을 찾지 못했습니다')
-        pm = self.person_mask()
-        hsv = cv2.cvtColor(self.base, cv2.COLOR_BGR2HSV)
-        brow_y = int(pts[self.BROW_L + self.BROW_R][:, 1].min())
-        hat = ((hsv[..., 2] < 90) & (pm > 0.5)).astype(np.uint8)
-        hat[brow_y:] = 0
-        n, lab, stats, _ = cv2.connectedComponentsWithStats(hat)
-        if n < 2:
-            raise ValueError('모자를 찾지 못했습니다 (어두운 모자만 자동 검출됩니다)')
-        best = max(range(1, n), key=lambda i: stats[i, cv2.CC_STAT_AREA])
         _, fw, _ = C.face_frame(pts)
-        if stats[best, cv2.CC_STAT_WIDTH] < 0.8 * fw:
-            raise ValueError('모자를 찾지 못했습니다')
+        brow_y = int(pts[self.BROW_L + self.BROW_R][:, 1].min())
+        cls = self.classes()
+        hat = (cls == self.CLASSES['others']).astype(np.uint8)
+        hat[brow_y + int(0.15 * fw):] = 0
+        hat = cv2.morphologyEx(hat, cv2.MORPH_OPEN, self._disc_px(int(fw * 0.02)))
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(hat)
+        best = max(range(1, n), key=lambda i: stats[i, cv2.CC_STAT_AREA]) if n > 1 else None
+        if best is None or stats[best, cv2.CC_STAT_WIDTH] < 1.3 * fw:
+            pm = self.person_mask()
+            hsv = cv2.cvtColor(self.base, cv2.COLOR_BGR2HSV)
+            hat = ((hsv[..., 2] < 90) & (pm > 0.5) & (cls != self.CLASSES['hair'])).astype(np.uint8)
+            hat[brow_y:] = 0
+            n, lab, stats, _ = cv2.connectedComponentsWithStats(hat)
+            best = max(range(1, n), key=lambda i: stats[i, cv2.CC_STAT_AREA]) if n > 1 else None
+            if best is None or stats[best, cv2.CC_STAT_WIDTH] < 1.5 * fw:
+                raise ValueError('모자 없음')
         return (lab == best).astype(np.uint8), stats[best]
 
     def hat_angle(self):
@@ -903,16 +939,20 @@ class Session:
         pts = self.landmarks()
         if pts is None:
             raise ValueError('얼굴을 찾지 못했습니다')
-        pm = self.person_mask()
+        cls = self.classes()
+        body = (cls == self.CLASSES['clothes'])
+        if body.mean() < 0.01:                      # no clothes found (bare shoulders?): whole person minus hair
+            body = (self.person_mask() > 0.5) & (cls != self.CLASSES['hair'])
+        body = body.astype(np.float32)
         c, fw, _ = C.face_frame(pts)
         chin_y = int(pts[152, 1])
         out = {}
         for name, sign in (('left', -1), ('right', 1)):
             x = int(round(c[0] + sign * offset * fw))
-            if not 0 <= x < pm.shape[1]:
+            if not 0 <= x < body.shape[1]:
                 raise ValueError('어깨 기준점이 사진 밖입니다')
-            win = max(2, int(0.015 * pm.shape[1]))
-            cols = pm[chin_y:, max(0, x - win): x + win + 1] > 0.5
+            win = max(2, int(0.015 * body.shape[1]))
+            cols = body[chin_y:, max(0, x - win): x + win + 1] > 0.5
             if not cols.any():
                 raise ValueError(f'{name} 어깨를 찾지 못했습니다')
             tops = [int(np.argmax(cols[:, j])) for j in range(cols.shape[1]) if cols[:, j].any()]
@@ -958,6 +998,132 @@ class Session:
         self.pts_checked = False
         return angle
 
+    def outside_backdrop(self, thresh=3.0, regions=None):
+        """Pixels that are neither the person nor the backdrop — stand edges,
+        floor, wall. Without `regions` it is a conservative colour test
+        (clearly off-backdrop colour, or darker than any backdrop, touching the
+        border). With `regions` (0..1 polygons roughly covering what to fill),
+        GrabCut refines each polygon against the backdrop's colour model."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        pm = self.person_mask()
+        h, w = self.base.shape[:2]
+        c, fw, _ = C.face_frame(pts)
+        small = downscale(self.base, 1536)
+        lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB).astype(np.float32)
+        H, W = lab.shape[:2]
+        k = W / w
+        pm_s = cv2.resize(pm, (W, H))
+        ys, xs = np.mgrid[0:H, 0:W]
+        ring = (np.hypot(xs - c[0] * k, ys - c[1] * k) < 2.2 * fw * k) & (pm_s < 0.2)
+        if ring.sum() < 500:
+            raise ValueError('머리 주변에서 배경 표본을 얻지 못했습니다')
+        ref = lab[ring]
+        mu, icov = ref.mean(0), np.linalg.inv(np.cov(ref.T) + np.eye(3) * 4)
+        d = lab - mu
+        maha = np.sqrt(np.einsum('...i,ij,...j->...', d, icov, d))
+        too_dark = lab[..., 0] < np.percentile(ref[:, 0], 0.5) - 6
+        seed = (((maha > thresh) | too_dark) & (pm_s < 0.3)).astype(np.uint8)
+        seed = cv2.morphologyEx(seed, cv2.MORPH_OPEN, self._disc_px(int(W * 0.01)))
+
+        if regions:
+            poly = np.zeros((H, W), np.uint8)
+            for r in regions:
+                cv2.fillPoly(poly, [np.round(np.array(r, np.float32) * [W, H]).astype(np.int32)], 1)
+            gc = np.full((H, W), cv2.GC_BGD, np.uint8)
+            gc[poly > 0] = cv2.GC_PR_FGD
+            gc[(poly > 0) & (seed > 0)] = cv2.GC_FGD
+            gc[ring] = cv2.GC_BGD
+            gc[pm_s > 0.3] = cv2.GC_BGD
+            bgm, fgm = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+            try:
+                cv2.grabCut(small, gc, None, bgm, fgm, 4, cv2.GC_INIT_WITH_MASK)
+                keep = ((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD)).astype(np.uint8)
+            except cv2.error:
+                keep = poly
+            keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, self._disc_px(int(W * 0.01)))
+            keep[pm_s > 0.3] = 0
+        else:
+            n, lab_, stats, _ = cv2.connectedComponentsWithStats(seed)
+            keep = np.zeros_like(seed)
+            for i in range(1, n):
+                x0, y0, bw, bh, area = stats[i]
+                touches = x0 == 0 or y0 == 0 or x0 + bw == W or y0 + bh == H
+                if touches and area > 0.002 * seed.size:
+                    keep[lab_ == i] = 1
+        keep = cv2.dilate(keep, self._disc_px(int(W * 0.012)))
+        return cv2.resize(keep, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    def edit_extend_backdrop(self, thresh=3.0, work=2048, regions=None):
+        """Fill everything outside the backdrop with the backdrop's own texture:
+        the smooth light falloff is extrapolated, and the mottling is tiled in
+        from patches of real backdrop whose brightness matches."""
+        hole_full = self.outside_backdrop(thresh, regions)
+        if hole_full.mean() < 0.001:
+            raise ValueError('배경지 바깥 영역이 없습니다 (이미 프레임을 다 채움)')
+        pm_full = self.person_mask()
+        h, w = self.base.shape[:2]
+        k = min(1.0, work / max(h, w))
+        img = downscale(self.base, work).astype(np.float32)
+        H, W = img.shape[:2]
+        hole = cv2.resize(hole_full, (W, H), interpolation=cv2.INTER_NEAREST)
+        person = cv2.resize(pm_full, (W, H)) > 0.3
+        src = ((hole == 0) & ~person).astype(np.uint8)
+        src = cv2.erode(src, self._disc_px(int(W * 0.015)))
+        rng = np.random.default_rng(0)
+
+        srcf = src.astype(np.float32)
+        def nblur(a, sig):
+            return cv2.GaussianBlur(a * srcf[..., None], (0, 0), sig) / np.maximum(cv2.GaussianBlur(srcf, (0, 0), sig), 1e-4)[..., None]
+        # light falloff extrapolated into the hole: use progressively wider
+        # blurs where the narrow one has no support, and the global mean beyond
+        low = nblur(img, W * 0.06)
+        for sig in (W * 0.15, W * 0.4):
+            den = cv2.GaussianBlur(srcf, (0, 0), sig * 0.4)
+            weak = den < 0.05
+            low[weak] = nblur(img, sig)[weak]
+        den = cv2.GaussianBlur(srcf, (0, 0), W * 0.16)
+        low[den < 0.05] = img[src > 0].mean(0)
+        patch = max(32, int(W * 0.14))
+        low2 = nblur(img, patch * 0.5)
+        tex = (img - low2) * 0.85                     # mottling, valid where src; a touch softer than the real thing
+
+        ok = cv2.erode(src, np.ones((patch, patch), np.uint8))          # patch fully inside source
+        cand = np.argwhere(ok[:H - patch, :W - patch] > 0)
+        if len(cand) < 20:
+            raise ValueError('질감을 가져올 배경이 부족합니다')
+        cand_sel = cand[rng.choice(len(cand), min(400, len(cand)), replace=False)] if len(cand) > 400 else cand
+        cand_mean = np.array([low2[y:y + patch, x:x + patch].mean() for y, x in cand_sel])
+        win = np.hanning(patch)[:, None] * np.hanning(patch)[None, :]
+        win = (win + 0.02)[..., None].astype(np.float32)
+        acc = np.zeros_like(img); wsum = np.zeros((H, W, 1), np.float32)
+        step = patch // 2
+        for ty in range(0, H, step):
+            for tx in range(0, W, step):
+                y1, x1 = min(H, ty + patch), min(W, tx + patch)
+                if not hole[ty:y1, tx:x1].any():
+                    continue
+                target = low[ty:y1, tx:x1].mean()
+                j = int(np.argmin(np.abs(cand_mean - target) + rng.normal(0, 3, len(cand_mean))))
+                sy, sx = cand_sel[j]
+                ph, pw = y1 - ty, x1 - tx
+                acc[ty:y1, tx:x1] += (low[ty:y1, tx:x1] + tex[sy:sy + ph, sx:sx + pw]) * win[:ph, :pw]
+                wsum[ty:y1, tx:x1] += win[:ph, :pw]
+        filled = np.where(wsum > 0, acc / np.maximum(wsum, 1e-4), img)
+        soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), W * 0.012)[..., None]
+        soft = np.maximum(soft, hole[..., None].astype(np.float32))       # the hole itself stays fully filled
+        outs = img * (1 - soft) + filled * soft
+        outs = np.clip(outs, 0, 255).astype(np.uint8)
+        # back to full resolution: only the hole pixels change
+        up = cv2.resize(outs, (w, h), interpolation=cv2.INTER_CUBIC)
+        m = cv2.GaussianBlur(hole_full.astype(np.float32), (0, 0), w * 0.012)[..., None]
+        m = np.maximum(m, hole_full[..., None].astype(np.float32))
+        m[pm_full[..., None] > 0.5] = 0                                    # never touch the person
+        self.snapshot('배경 확장')
+        self.base = (self.base * (1 - m) + up * m).round().astype(np.uint8)
+        return float(hole_full.mean())
+
     def pose_report(self):
         pts = self.landmarks()
         if pts is None:
@@ -966,7 +1132,7 @@ class Session:
         try:
             bits.append(f'모자 윗선 {self.hat_angle():+.1f}°')
         except ValueError as e:
-            bits.append(f'모자: {e}')
+            bits.append(str(e) if str(e) == '모자 없음' else f'모자: {e}')
         try:
             sp = self.shoulder_points()
             (xl, yl), (xr, yr) = sp['left'], sp['right']
@@ -1099,6 +1265,7 @@ auto_levels 는 채널별 히스토그램을 펴서 색 틀어짐·뿌연 느낌
 smooth_skin 은 얼굴 피부만 부드럽게(0~1). face_models 는 사용자의 보정 쌍으로 학습된 얼굴형·질감 모델이며 [현재 상태]에 "있음"일 때만 씁니다.
 crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)은 save 의 size 로 처리되며 가운데 기준으로 잘립니다.
 
+배경지가 프레임을 다 못 채워 스탠드·바닥·벽이 보이면 extend_backdrop 으로 먼저 채운 뒤 crop 합니다(사용자 보정본은 배경을 늘려 넓게 남기는 편).
 학사모 사진(주 작업): 기준은 모자 수평 · 고개 수직 · 어깨선 좌우 일치 · 옷매무새. 먼저 pose_check 로 세 각도를 재고, level_hat → head_tilt → level_shoulders 순으로 맞춘 뒤(각 단계 미리보기 확인), 옷 주름·좌우 비대칭은 liquify 로 정리하고, crop → smooth_skin → 색 순서로 마무리합니다. 배경 흐림(background blur)은 기본 순서에 넣지 않습니다 — 사용자가 따로 시킬 때만. 머리 뒤 글로우(dodge_burn only=background)도 요청이 있을 때만.
 기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
 얼굴 리퀴파이(face_shape)는 포토샵 얼굴 인식 리퀴파이와 같은 슬라이더입니다. "눈 좀 크게" → eye_size 25, "턱 갸름하게" → jawline -30 face_width -15 식으로 작은 값부터, 결과를 보고 올립니다.
@@ -1155,6 +1322,9 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'crop':
                 self.edit_crop(float(inp['x0']), float(inp['y0']), float(inp['x1']), float(inp['y1']))
                 return f'크롭: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
+            if name == 'extend_backdrop':
+                frac = self.edit_extend_backdrop(float(inp.get('threshold', 3.0)), regions=inp.get('regions'))
+                return f'배경지 바깥 {frac * 100:.0f}% 를 배경 질감으로 채움', self.render()
             if name == 'pose_check':
                 return self.pose_report(), None
             if name == 'level_hat':
@@ -1240,6 +1410,8 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'geom_strength': {'type': 'number'}, 'tex_strength': {'type': 'number'}}}},
     {'name': 'crop', 'description': '0~1 비율 상자로 자른다.',
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
+    {'name': 'extend_backdrop', 'description': '배경지가 프레임을 다 못 채운 사진(배경지 가장자리·스탠드·바닥·벽이 보임)에서 그 바깥을 배경지 자체의 질감과 명암으로 채워 프레임 끝까지 늘린다. regions 에 채울 곳을 0~1 다각형 목록으로 대략 그려 주면(모서리 삼각형, 좌우 띠, 아래 띠 등 — 넉넉하게, 인물은 자동 제외) 경계는 색으로 다듬는다. regions 없이 부르면 색으로만 보수적으로 찾는데 배경지의 어두운 테두리와 검은 스탠드가 이어진 사진에선 놓치므로, 미리보기를 보고 남은 곳을 regions 로 다시 부를 것.',
+     'input_schema': {'type': 'object', 'properties': {'threshold': {'type': 'number'}, 'regions': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}, 'minItems': 3}}}}},
     {'name': 'pose_check', 'description': '학사모 사진 점검: 고개 기울기, 모자 윗선 기울기, 어깨선 기울기를 잰다(수정 아님). 양수 = 오른쪽이 낮음.',
      'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'level_hat', 'description': '학사모 판을 돌려 윗선을 수평으로. angle 생략 시 자동 측정값. 판만 움직이고 모자 몸통은 그대로.',
