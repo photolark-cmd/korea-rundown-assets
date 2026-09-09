@@ -44,6 +44,17 @@ def list_images(folder):
     return sorted(f for f in os.listdir(folder) if f.lower().endswith(IMG_EXT))
 
 
+def console_utf8():
+    """윈도 콘솔은 기본이 cp949 라, 출력에 — 같은 글자가 하나 섞이면
+    UnicodeEncodeError 로 스크립트가 통째로 죽는다 — 계산이 다 끝난 뒤 마지막
+    print 에서 죽으므로 결과까지 같이 날아간다. 진입점마다 먼저 부른다."""
+    for st in (sys.stdout, sys.stderr):
+        try:
+            st.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
+
 def imread(path):
     data = np.fromfile(path, np.uint8)      # handles non-ASCII paths on Windows
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
@@ -102,16 +113,71 @@ class Landmarker:
             faces.append(pts)
         return faces
 
+    def _scan_windows(self, bgr):
+        """전신 입상 사진 대비. 6720px 세로 사진에서 얼굴은 300px 남짓인데,
+        전체를 DETECT_EDGE 로 줄이면 얼굴이 50px 이 되고 검출기 입력에서는 10px 이
+        되어 절대 안 잡힌다. 프레임을 겹치는 창으로 나눠 각 창에서 다시 찾는다.
+        반환은 원본 좌표계의 가장 큰 얼굴."""
+        h, w = bgr.shape[:2]
+        best = None
+        for frac in (0.5, 0.33):
+            wh, ww = int(h * frac), int(w * frac)
+            if wh < 32 or ww < 32:
+                continue
+            ys = sorted({0, *range(0, max(1, h - wh + 1), max(1, wh // 2)), h - wh})
+            xs = sorted({0, *range(0, max(1, w - ww + 1), max(1, ww // 2)), w - ww})
+            for y in ys:
+                for x in xs:
+                    win = bgr[y:y + wh, x:x + ww]
+                    kk = min(1.0, DETECT_EDGE / max(win.shape[:2]))
+                    ws = cv2.resize(win, None, fx=kk, fy=kk, interpolation=cv2.INTER_AREA) if kk < 1 else win
+                    got = self._detect_raw(ws)
+                    for p in got:
+                        p = p / kk + np.array([x, y], np.float32)
+                        if best is None or np.ptp(p[:, 0]) > np.ptp(best[:, 0]):
+                            best = p
+            if best is not None:
+                return best                       # 큰 창에서 찾았으면 더 잘게 볼 필요 없다
+        return best
+
+    def detect_near(self, bgr, ref_pts, grow=2.2):
+        """ref_pts(다른 이미지에서 찾은 같은 얼굴) 주변만 보고 검출한다.
+
+        원본/보정본처럼 화소가 정렬된 두 장을 각자 독립으로 검출하면, 창 스캔이
+        서로 다른 창에 걸려 좌표계가 통째로 어긋난다 — 변형량이 얼굴 폭의 수십 %로
+        나오는 원인이 그것이었다. 한쪽에서 찾은 자리를 다른 쪽에 물려주면
+        두 검출이 같은 출발점을 갖는다."""
+        h, w = bgr.shape[:2]
+        x0, y0 = ref_pts.min(0)
+        x1, y1 = ref_pts.max(0)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        side = max(x1 - x0, y1 - y0) * grow
+        X0, Y0 = int(max(0, cx - side / 2)), int(max(0, cy - side / 2))
+        X1, Y1 = int(min(w, cx + side / 2)), int(min(h, cy + side / 2))
+        crop = bgr[Y0:Y1, X0:X1]
+        if crop.size == 0:
+            return None
+        k = min(1.0, REFINE_EDGE / max(crop.shape[:2]))
+        cs = cv2.resize(crop, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else crop
+        faces = self._detect_raw(cs)
+        if not faces:
+            return None
+        faces.sort(key=lambda p: -np.ptp(p[:, 0]))
+        return faces[0] / k + np.array([X0, Y0], np.float32)
+
     def detect(self, bgr):
         """Return landmarks (468, 2) of the largest face in image pixels, or None."""
         h, w = bgr.shape[:2]
         k = min(1.0, DETECT_EDGE / max(h, w))
         small = cv2.resize(bgr, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else bgr
         faces = self._detect_raw(small)
-        if not faces:
-            return None
-        faces.sort(key=lambda p: -np.ptp(p[:, 0]))
-        pts = faces[0] / k
+        if faces:
+            faces.sort(key=lambda p: -np.ptp(p[:, 0]))
+            pts = faces[0] / k
+        else:
+            pts = self._scan_windows(bgr)
+            if pts is None:
+                return None
 
         # Second pass on a crop around the face at up to REFINE_EDGE pixels.
         x0, y0 = pts.min(0); x1, y1 = pts.max(0)

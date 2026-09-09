@@ -96,6 +96,7 @@ def save_preview(path, b, pred, a):
 
 
 def main():
+    C.console_utf8()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('data')
     ap.add_argument('--epochs', type=int, default=40)

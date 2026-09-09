@@ -45,6 +45,7 @@ def cv_rms(X, Y, alpha, folds=5, seed=0):
 
 
 def main():
+    C.console_utf8()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('data')
     ap.add_argument('--out')

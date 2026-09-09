@@ -128,6 +128,7 @@ def write_with_exif(src_path, dst_path, img, quality):
 
 
 def main():
+    C.console_utf8()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('input')
     ap.add_argument('--out', required=True)
