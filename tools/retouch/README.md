@@ -85,6 +85,26 @@ python tools/retouch/studio.py --folder 촬영본/ --out 결과/ --data work/
 | "이 보이게 활짝 웃는 컷으로" | `mouth_from` — 같은 사람의 웃는 컷에서 입을 옮겨 붙임. 진짜 이가 필요하므로 이 방법뿐. 볼·눈은 안 바뀌니 결과 확인 필수 |
 | "아까 걸로 되돌려" | `undo` |
 
+포토샵 이름으로 말해도 됩니다 — 대응 도구가 있습니다.
+
+| 포토샵 | 스튜디오 도구 | 비고 |
+|---|---|---|
+| Camera Raw 기본 패널 · 자동 톤 · Color Lookup | `adjust` · `auto_levels` · `preset` | |
+| 커브 | `curves` | 채널별 점 목록, 모노톤 스플라인 |
+| HSL / 선택 색상 | `hsl` | 8개 색 범위별 색조·채도·명도 |
+| 닷지 · 번 | `dodge_burn` | 둥근 브러시, 미드톤 보호 |
+| 스팟 힐링 · 도장 | `heal` · `clone` | 도장은 색 맞춤(seamless) 옵션 |
+| 비네팅 | `vignette` | |
+| 노이즈 감소 | `denoise` | 비지역 평균, 큰 사진은 수십 초 |
+| 피사체 선택 → 배경 흐림/단색/투명 | `background` | MediaPipe 사람 분리. 투명은 PNG 로 저장 |
+| 리퀴파이 (앞으로 밀기) · 얼굴 인식 리퀴파이 | `liquify` · `expression` `head_tilt` `face_models` | |
+| 원근 자르기 | `perspective` | 간판·가격표·화면 |
+| 자르기 · 똑바르게 · 언샤프 마스크 · 히스토리 | `crop` · `straighten` · `adjust sharpen` · `undo` | |
+
+**없는 것** — 레이어·마스크·브러시 페인팅·문자·벡터 같은 손으로 그리는 UI, 그리고 생성 채우기·
+뉴럴 필터·하늘 대체·초해상도 같은 **생성 모델** 기능. 후자는 GPU 모델(LaMa, Real-ESRGAN, LivePortrait)을
+붙이면 되지만 별도 설치와 확인이 필요합니다.
+
 도구 호출 내역은 대화창에 회색 한 줄씩 찍혀서 무엇을 했는지 보입니다.
 
 **비용·프라이버시.** 사진 자체는 PC 안에서만 처리되고, 대화 때 긴 변 1024px로 줄인 미리보기가

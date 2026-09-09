@@ -94,6 +94,7 @@ class Session:
         self.undo_stack = []
         self.pts = None
         self.pts_checked = False
+        self.alpha = None
 
     # ---- presets
     def _load_presets(self, presets_js):
@@ -183,6 +184,8 @@ class Session:
         bits.append('되돌리기 가능: ' + (' → '.join(s['undo']) if s['undo'] else '없음'))
         bits.append('얼굴: ' + {None: '아직 확인 안 함', True: '검출됨', False: '없음'}[s['face']])
         bits.append('학습된 얼굴 모델: ' + ('있음' if s['models'] else '없음 (face_models 사용 불가)'))
+        if self.alpha is not None:
+            bits.append('배경 분리됨(투명 PNG 로 저장)')
         if s['face'] and self.pts is not None:
             bits.append(f'눈높이 기울기 {np.degrees(C.face_frame(self.pts)[2]):+.1f}°')
         if self.args.folder and os.path.isdir(self.args.folder):
@@ -442,6 +445,215 @@ class Session:
         self.base = out
         self.pts_checked = False
 
+    # ---- Photoshop-style tools: curves, HSL, dodge/burn, clone, vignette,
+    #      denoise, background, free liquify, perspective
+    @staticmethod
+    def curve_lut(points):
+        """Monotone cubic (Fritsch–Carlson) through (in, out) points, like the
+        Curves dialog. Endpoints default to (0,0) and (255,255)."""
+        pts = {0: 0.0, 255: 255.0}
+        for x, y in points:
+            pts[int(np.clip(x, 0, 255))] = float(np.clip(y, 0, 255))
+        x = np.array(sorted(pts), np.float64)
+        y = np.array([pts[int(v)] for v in x], np.float64)
+        n = len(x)
+        h = np.diff(x)
+        delta = np.diff(y) / h
+        m = np.zeros(n)
+        m[0], m[-1] = delta[0], delta[-1]
+        for k in range(1, n - 1):
+            m[k] = 0.0 if delta[k - 1] * delta[k] <= 0 else (delta[k - 1] + delta[k]) / 2
+        for k in range(n - 1):
+            if delta[k] == 0:
+                m[k] = m[k + 1] = 0.0
+            else:
+                a, b = m[k] / delta[k], m[k + 1] / delta[k]
+                s2 = a * a + b * b
+                if s2 > 9:
+                    t = 3 / np.sqrt(s2)
+                    m[k], m[k + 1] = t * a * delta[k], t * b * delta[k]
+        out = np.empty(256)
+        for k in range(n - 1):
+            sel = np.arange(int(x[k]), int(x[k + 1]) + 1)
+            t = (sel - x[k]) / h[k]
+            h00, h10, h01, h11 = 2 * t ** 3 - 3 * t ** 2 + 1, t ** 3 - 2 * t ** 2 + t, -2 * t ** 3 + 3 * t ** 2, t ** 3 - t ** 2
+            out[sel] = h00 * y[k] + h10 * h[k] * m[k] + h01 * y[k + 1] + h11 * h[k] * m[k + 1]
+        return np.clip(out, 0, 255).round().astype(np.uint8)
+
+    def edit_curves(self, rgb=None, red=None, green=None, blue=None):
+        luts = [self.curve_lut(blue or []), self.curve_lut(green or []), self.curve_lut(red or [])]
+        master = self.curve_lut(rgb or [])
+        img = np.empty_like(self.base)
+        for c in range(3):
+            img[..., c] = master[luts[c][self.base[..., c]]]
+        self.snapshot('커브')
+        self.base = img
+
+    HSL_CENTRES = {'red': 0, 'orange': 30, 'yellow': 60, 'green': 120, 'aqua': 180, 'blue': 240, 'purple': 270, 'magenta': 300}
+
+    def edit_hsl(self, ranges):
+        """Camera Raw's HSL panel: per colour range, shift hue (degrees), scale
+        saturation and luminance (-100..100). Ranges overlap with soft edges."""
+        hsv = cv2.cvtColor(self.base.astype(np.float32) / 255, cv2.COLOR_BGR2HSV)   # H 0..360
+        H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+        H2, S2, V2 = H.copy(), S.copy(), V.copy()
+        for name, adj in ranges.items():
+            if name not in self.HSL_CENTRES:
+                raise ValueError(f'모르는 색 범위 {name} (가능: {", ".join(self.HSL_CENTRES)})')
+            d = np.abs((H - self.HSL_CENTRES[name] + 180) % 360 - 180)
+            w = np.clip(1 - d / 45, 0, 1) * np.clip(S * 4, 0, 1)         # grey pixels are not "a colour"
+            H2 += float(adj.get('hue', 0)) * w
+            S2 *= 1 + float(adj.get('saturation', 0)) / 100 * w
+            V2 *= 1 + float(adj.get('luminance', 0)) / 100 * w * 0.6
+        hsv = np.stack([H2 % 360, np.clip(S2, 0, 1), np.clip(V2, 0, 1)], -1)
+        self.snapshot('HSL')
+        self.base = np.clip(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR) * 255, 0, 255).round().astype(np.uint8)
+
+    def _soft_disc(self, x, y, radius, feather=0.5):
+        h, w = self.base.shape[:2]
+        r = max(2.0, float(radius) * w)
+        cx, cy = float(x) * w, float(y) * h
+        X0, Y0 = int(max(0, cx - 2 * r)), int(max(0, cy - 2 * r))
+        X1, Y1 = int(min(w, cx + 2 * r + 1)), int(min(h, cy + 2 * r + 1))
+        ys, xs = np.mgrid[Y0:Y1, X0:X1].astype(np.float32)
+        d = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2) / r
+        inner = 1 - float(feather)
+        m = np.clip((1 - d) / max(1e-3, 1 - inner), 0, 1)
+        m = m * m * (3 - 2 * m)
+        return (slice(Y0, Y1), slice(X0, X1)), m[..., None]
+
+    def edit_dodge_burn(self, x, y, radius, amount, feather=0.6):
+        """Local lighten (amount > 0) or darken (< 0) with a soft round brush."""
+        sl, m = self._soft_disc(x, y, radius, feather)
+        roi = self.base[sl].astype(np.float32) / 255
+        a = float(np.clip(amount, -1, 1))
+        # gamma-space nudge that protects the extremes, like Photoshop's midtones mode
+        out = roi ** (1 - 0.6 * a * m) if a >= 0 else roi ** (1 + 0.8 * -a * m)
+        self.snapshot('닷지' if a >= 0 else '번')
+        img = self.base.copy()
+        img[sl] = np.clip(out * 255, 0, 255).round().astype(np.uint8)
+        self.base = img
+
+    def edit_clone(self, sx, sy, dx, dy, radius, seamless=True):
+        """Clone stamp: copy a soft disc from (sx,sy) onto (dx,dy)."""
+        h, w = self.base.shape[:2]
+        r = max(3, int(float(radius) * w))
+        SX, SY, DX, DY = int(float(sx) * w), int(float(sy) * h), int(float(dx) * w), int(float(dy) * h)
+        if not (r <= SX < w - r and r <= SY < h - r and r <= DX < w - r and r <= DY < h - r):
+            raise ValueError('도장 영역이 사진 밖으로 나갑니다')
+        patch = self.base[SY - r:SY + r, SX - r:SX + r]
+        mask = np.zeros((2 * r, 2 * r), np.uint8)
+        cv2.circle(mask, (r, r), int(r * 0.85), 255, -1)
+        self.snapshot('도장')
+        if seamless:
+            self.base = cv2.seamlessClone(patch, self.base, mask, (DX, DY), cv2.NORMAL_CLONE)
+        else:
+            soft = cv2.GaussianBlur(mask, (0, 0), r * 0.15).astype(np.float32)[..., None] / 255
+            img = self.base.copy()
+            roi = img[DY - r:DY + r, DX - r:DX + r]
+            img[DY - r:DY + r, DX - r:DX + r] = (patch * soft + roi * (1 - soft)).round().astype(np.uint8)
+            self.base = img
+
+    def edit_vignette(self, amount=-0.4, midpoint=0.5, feather=0.6):
+        """Post-crop vignette: amount < 0 darkens the corners, > 0 lightens."""
+        h, w = self.base.shape[:2]
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+        d = np.sqrt(((xs - w / 2) / (w / 2)) ** 2 + ((ys - h / 2) / (h / 2)) ** 2) / np.sqrt(2)
+        start = float(midpoint) * (1 - float(feather))
+        m = np.clip((d - start) / max(1e-3, float(midpoint) + float(feather) * 0.5 - start), 0, 1)
+        m = (m * m * (3 - 2 * m))[..., None]
+        a = float(np.clip(amount, -1, 1))
+        img = self.base.astype(np.float32) / 255
+        out = img ** (1 + 1.5 * -a * m) if a < 0 else 1 - (1 - img) ** (1 + 1.5 * a * m)
+        self.snapshot('비네팅')
+        self.base = np.clip(out * 255, 0, 255).round().astype(np.uint8)
+
+    def edit_denoise(self, strength=8):
+        h = float(np.clip(strength, 1, 30))
+        self.snapshot('노이즈 제거')
+        self.base = cv2.fastNlMeansDenoisingColored(self.base, None, h, h, 7, 21)
+
+    def person_mask(self):
+        """Person/background matte from MediaPipe's selfie segmenter (0..1)."""
+        if getattr(self, '_seg', None) is None:
+            import urllib.request
+            import mediapipe as mp
+            from mediapipe.tasks.python import vision
+            from mediapipe.tasks.python.core.base_options import BaseOptions
+            path = os.path.join(C.HERE, 'models', 'selfie_segmenter.tflite')
+            if not os.path.exists(path):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                urllib.request.urlretrieve('https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite', path)
+            self._mp = mp
+            self._seg = vision.ImageSegmenter.create_from_options(
+                vision.ImageSegmenterOptions(base_options=BaseOptions(model_asset_path=path), output_confidence_masks=True))
+        small = downscale(self.base, 1024)
+        res = self._seg.segment(self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB)))
+        m = res.confidence_masks[0].numpy_view()[..., 0].astype(np.float32)
+        if (m > 0.5).mean() < 0.01:
+            raise ValueError('사람을 찾지 못해 배경을 분리할 수 없습니다')
+        h, w = self.base.shape[:2]
+        m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+        return cv2.GaussianBlur(m, (0, 0), max(1.0, w * 0.003))
+
+    def edit_background(self, mode='blur', strength=0.5, color='#ffffff'):
+        m = self.person_mask()[..., None]
+        h, w = self.base.shape[:2]
+        if mode == 'blur':
+            k = max(3.0, float(strength) * w * 0.04)
+            bg = cv2.GaussianBlur(self.base, (0, 0), k)
+            out = (self.base * m + bg * (1 - m)).round().astype(np.uint8)
+            self.snapshot('배경 흐림')
+            self.base = out
+        elif mode == 'color':
+            c = color.lstrip('#')
+            bgr = np.array([int(c[4:6], 16), int(c[2:4], 16), int(c[0:2], 16)], np.float32)
+            out = (self.base * m + bgr * (1 - m)).round().astype(np.uint8)
+            self.snapshot('배경 단색')
+            self.base = out
+        elif mode == 'transparent':
+            self.snapshot('배경 투명')
+            self.alpha = m[..., 0]
+        else:
+            raise ValueError('mode 는 blur | color | transparent')
+
+    def edit_liquify(self, fx, fy, tx, ty, radius):
+        """Photoshop's Forward Warp: push pixels from (fx,fy) toward (tx,ty)."""
+        h, w = self.base.shape[:2]
+        r = max(4.0, float(radius) * w)
+        FX, FY, TX, TY = float(fx) * w, float(fy) * h, float(tx) * w, float(ty) * h
+        vx, vy = TX - FX, TY - FY
+        if np.hypot(vx, vy) > 2 * r:
+            raise ValueError('한 번에 반지름의 2배 넘게 밀 수 없습니다. 나눠서 미세요')
+        X0, Y0 = int(max(0, min(FX, TX) - 2 * r)), int(max(0, min(FY, TY) - 2 * r))
+        X1, Y1 = int(min(w, max(FX, TX) + 2 * r + 1)), int(min(h, max(FY, TY) + 2 * r + 1))
+        ys, xs = np.mgrid[Y0:Y1, X0:X1].astype(np.float32)
+        d = np.sqrt((xs - TX) ** 2 + (ys - TY) ** 2) / r      # weight around where pixels end up
+        wgt = np.clip(1 - d * d, 0, 1) ** 2
+        map_x, map_y = xs - vx * wgt, ys - vy * wgt
+        roi = cv2.remap(self.base, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        self.snapshot('리퀴파이')
+        img = self.base.copy()
+        img[Y0:Y1, X0:X1] = roi
+        self.base = img
+
+    def edit_perspective(self, corners):
+        """Rectify a quadrilateral (TL, TR, BR, BL as 0..1 points) into a
+        straight-on rectangle — signs, price tags, screens."""
+        h, w = self.base.shape[:2]
+        src = np.array([[float(x) * w, float(y) * h] for x, y in corners], np.float32)
+        if src.shape != (4, 2):
+            raise ValueError('corners 는 네 점 [TL, TR, BR, BL]')
+        tw = int(round((np.linalg.norm(src[1] - src[0]) + np.linalg.norm(src[2] - src[3])) / 2))
+        th = int(round((np.linalg.norm(src[3] - src[0]) + np.linalg.norm(src[2] - src[1])) / 2))
+        if tw < 16 or th < 16:
+            raise ValueError('영역이 너무 작습니다')
+        dst = np.array([[0, 0], [tw - 1, 0], [tw - 1, th - 1], [0, th - 1]], np.float32)
+        Hm = cv2.getPerspectiveTransform(src, dst)
+        self.snapshot('원근 보정')
+        self.base = cv2.warpPerspective(self.base, Hm, (tw, th), flags=cv2.INTER_LANCZOS4)
+        self.pts_checked = False
+
     def save(self, size='orig', name=None):
         from retouch import write_with_exif
         out = self.render(full=True)
@@ -459,6 +671,11 @@ class Session:
             out = cv2.warpAffine(out, M, (tw, th), flags=cv2.INTER_AREA)
         os.makedirs(self.args.out, exist_ok=True)
         base = name or (os.path.splitext(self.name)[0] + '-fix')
+        if self.alpha is not None and not spec:
+            path = os.path.join(self.args.out, base + '.png')
+            rgba = np.dstack([out, (self.alpha * 255).round().astype(np.uint8)])
+            C.imwrite(path, rgba)
+            return path
         path = os.path.join(self.args.out, base + '.jpg')
         write_with_exif(self.src_path, path, out, 95)
         return path
@@ -563,6 +780,7 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
 
 기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
 표정: 살짝 미소·인상 풀기는 expression(워핑). 이가 보이는 활짝 웃음은 워핑으로 안 되고 mouth_from 으로 같은 사람의 웃는 컷에서 입을 가져오는 방법뿐입니다. 없는 이를 만들어내지는 못한다고 분명히 말하세요. 표정을 바꾼 뒤엔 미리보기를 보고 부자연스러우면 강도를 낮추거나 undo 합니다.
+포토샵식 도구: curves(커브) · hsl(색 범위별 색조/채도/명도) · dodge_burn(국소 밝기) · clone(도장) · vignette · denoise(야간 노이즈) · background(배경 흐림/단색/투명) · liquify(자유 밀기) · perspective(간판·가격표 펴기). 사용자가 포토샵 용어로 말하면 대응되는 도구를 고르고, 국소 도구는 zoom 으로 위치를 확인한 뒤 씁니다.
 저장(save)은 사용자가 저장하라고 할 때만 합니다. 되돌리기는 undo. 요청이 애매하면 한 줄로 되묻습니다. 사진 속 인물에 대한 평가는 하지 않습니다."""
 
     def run_tool(self, name, inp):
@@ -629,6 +847,33 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'mouth_from':
                 self.edit_mouth_from(inp['donor'])
                 return f"{inp['donor']} 의 입을 옮겨 붙였습니다", self.render()
+            if name == 'curves':
+                self.edit_curves(inp.get('rgb'), inp.get('red'), inp.get('green'), inp.get('blue'))
+                return '커브 적용', self.render()
+            if name == 'hsl':
+                self.edit_hsl(inp['ranges'])
+                return 'HSL 적용', self.render()
+            if name == 'dodge_burn':
+                self.edit_dodge_burn(inp['x'], inp['y'], inp.get('radius', 0.08), inp['amount'], inp.get('feather', 0.6))
+                return '닷지/번 적용', self.render()
+            if name == 'clone':
+                self.edit_clone(inp['from_x'], inp['from_y'], inp['to_x'], inp['to_y'], inp.get('radius', 0.03), inp.get('seamless', True))
+                return '도장 적용', self.render()
+            if name == 'vignette':
+                self.edit_vignette(inp.get('amount', -0.4), inp.get('midpoint', 0.5), inp.get('feather', 0.6))
+                return '비네팅 적용', self.render()
+            if name == 'denoise':
+                self.edit_denoise(inp.get('strength', 8))
+                return '노이즈 제거 적용', self.render()
+            if name == 'background':
+                self.edit_background(inp.get('mode', 'blur'), inp.get('strength', 0.5), inp.get('color', '#ffffff'))
+                return ('배경 분리됨 — 저장하면 투명 PNG' if inp.get('mode') == 'transparent' else '배경 처리 적용'), self.render()
+            if name == 'liquify':
+                self.edit_liquify(inp['from_x'], inp['from_y'], inp['to_x'], inp['to_y'], inp.get('radius', 0.06))
+                return '리퀴파이 적용', self.render()
+            if name == 'perspective':
+                self.edit_perspective(inp['corners'])
+                return f'원근 보정: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
             if name == 'undo':
                 label = self.undo()
                 return (f'되돌림: {label}' if label else '되돌릴 것이 없음'), self.render()
@@ -637,6 +882,8 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
                 return f'저장됨: {path}', None
             raise ValueError(f'모르는 도구 {name}')
 
+
+PT = {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}}
 
 TOOLS = [
     {'name': 'adjust', 'description': '색·밝기 슬라이더를 바꾼다. 준 항목만 바뀌고 나머지는 유지. reset=true 면 전부 기본값으로.',
@@ -669,6 +916,24 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'smile': {'type': 'number', 'minimum': -1, 'maximum': 1}, 'relax_brow': {'type': 'number', 'minimum': 0, 'maximum': 1}}}},
     {'name': 'mouth_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 입을 가져와 붙인다. 이 보이는 웃음은 이 방법뿐(진짜 이가 필요). 같은 촬영·비슷한 각도여야 하고, 볼·눈은 안 바뀌므로 자연스러운지 결과를 꼭 확인할 것.',
      'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}}, 'required': ['donor']}},
+    {'name': 'curves', 'description': '커브. 각 채널에 [입력, 출력](0~255) 점 목록. 끝점 (0,0),(255,255) 는 자동. 예: 미드톤 살짝 밝게 rgb=[[128,140]], 검정 들어올리기 rgb=[[0,15]], S자 대비 rgb=[[64,54],[192,202]].',
+     'input_schema': {'type': 'object', 'properties': {k: PT for k in ('rgb', 'red', 'green', 'blue')}}},
+    {'name': 'hsl', 'description': 'Camera Raw HSL. 색 범위(red orange yellow green aqua blue purple magenta)별로 hue(도, ±30 정도) · saturation(-100~100) · luminance(-100~100). 피부는 orange, 하늘은 blue/aqua.',
+     'input_schema': {'type': 'object', 'properties': {'ranges': {'type': 'object', 'additionalProperties': {'type': 'object', 'properties': {'hue': {'type': 'number'}, 'saturation': {'type': 'number'}, 'luminance': {'type': 'number'}}}}}, 'required': ['ranges']}},
+    {'name': 'dodge_burn', 'description': '둥근 브러시로 국소 밝기 조정. amount > 0 닷지(밝게), < 0 번(어둡게), -1~1. radius 는 폭 대비 비율(기본 0.08).',
+     'input_schema': {'type': 'object', 'properties': {'x': {'type': 'number'}, 'y': {'type': 'number'}, 'radius': {'type': 'number'}, 'amount': {'type': 'number'}, 'feather': {'type': 'number'}}, 'required': ['x', 'y', 'amount']}},
+    {'name': 'clone', 'description': '도장 툴. (from) 위치의 둥근 조각을 (to) 위치에 붙인다. 잡티보다 큰 것(머리카락 한 가닥, 벽의 얼룩)에. seamless=true 면 색을 주변에 맞춤.',
+     'input_schema': {'type': 'object', 'properties': {'from_x': {'type': 'number'}, 'from_y': {'type': 'number'}, 'to_x': {'type': 'number'}, 'to_y': {'type': 'number'}, 'radius': {'type': 'number'}, 'seamless': {'type': 'boolean'}}, 'required': ['from_x', 'from_y', 'to_x', 'to_y']}},
+    {'name': 'vignette', 'description': '비네팅. amount -1~1 (음수 = 모서리 어둡게, 보통 -0.3~-0.5), midpoint 0~1, feather 0~1.',
+     'input_schema': {'type': 'object', 'properties': {'amount': {'type': 'number'}, 'midpoint': {'type': 'number'}, 'feather': {'type': 'number'}}}},
+    {'name': 'denoise', 'description': '노이즈 제거(비지역 평균). strength 1~30, 야간 사진은 6~12. 큰 사진은 수십 초 걸린다.',
+     'input_schema': {'type': 'object', 'properties': {'strength': {'type': 'number'}}}},
+    {'name': 'background', 'description': '사람/배경 분리. mode: blur(배경 흐림, strength 0~1) | color(단색 배경, color "#rrggbb") | transparent(저장 시 투명 PNG). 사람 사진에만.',
+     'input_schema': {'type': 'object', 'properties': {'mode': {'type': 'string', 'enum': ['blur', 'color', 'transparent']}, 'strength': {'type': 'number'}, 'color': {'type': 'string'}}, 'required': ['mode']}},
+    {'name': 'liquify', 'description': '자유 리퀴파이(앞으로 밀기). (from) 의 픽셀을 (to) 쪽으로 radius(폭 대비, 기본 0.06) 브러시로 민다. 한 번에 반지름의 2배까지. 턱선·어깨·옷 주름 등.',
+     'input_schema': {'type': 'object', 'properties': {'from_x': {'type': 'number'}, 'from_y': {'type': 'number'}, 'to_x': {'type': 'number'}, 'to_y': {'type': 'number'}, 'radius': {'type': 'number'}}, 'required': ['from_x', 'from_y', 'to_x', 'to_y']}},
+    {'name': 'perspective', 'description': '원근 보정. 네 모서리 [TL, TR, BR, BL] (0~1) 를 정면 직사각형으로 펴고 그 영역만 남긴다. 간판·가격표·화면 촬영에.',
+     'input_schema': {'type': 'object', 'properties': {'corners': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}, 'minItems': 4, 'maxItems': 4}}, 'required': ['corners']}},
     {'name': 'undo', 'description': '마지막 수정을 되돌린다.', 'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'save', 'description': '결과를 저장한다. size: orig | 1600 (가로 1600) | 1200x630 (영문 썸네일) | 1080x1080 (국내 썸네일).',
      'input_schema': {'type': 'object', 'properties': {'size': {'type': 'string', 'enum': list(SIZES)}, 'name': {'type': 'string'}}}},
