@@ -97,7 +97,8 @@ python tools/retouch/studio.py --folder 촬영본/ --out 결과/ --data work/
 | 비네팅 | `vignette` | |
 | 노이즈 감소 | `denoise` | 비지역 평균, 큰 사진은 수십 초 |
 | 피사체 선택 → 배경 흐림/단색/투명 | `background` | MediaPipe 사람 분리. 투명은 PNG 로 저장 |
-| 리퀴파이 (앞으로 밀기) · 얼굴 인식 리퀴파이 | `liquify` · `expression` `head_tilt` `face_models` | |
+| 리퀴파이 (앞으로 밀기) | `liquify` | |
+| **얼굴 인식 리퀴파이** (눈 크기·높이·너비·기울기·간격, 코 높이·너비, 미소·윗입술·아랫입술·입 너비·높이, 이마·턱 높이·턱선·얼굴 너비) | `face_shape` | 포토샵과 같은 16개 슬라이더, -100~100. 학습된 자동 버전은 `face_models` |
 | 원근 자르기 | `perspective` | 간판·가격표·화면 |
 | 자르기 · 똑바르게 · 언샤프 마스크 · 히스토리 | `crop` · `straighten` · `adjust sharpen` · `undo` | |
 

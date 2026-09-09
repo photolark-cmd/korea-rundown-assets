@@ -384,6 +384,119 @@ class Session:
 
     MOUTH_STABLE = [6, 168, 197, 195, 5, 4, 1, 33, 133, 362, 263, 234, 454, 93, 323]
 
+    # Face-Aware Liquify: the same sliders as Photoshop's panel, each one a
+    # landmark move in face-width units. Values are -100..100 like Photoshop.
+    EYE_L_IN = C.LEFT_EYE
+    EYE_R_IN = C.RIGHT_EYE
+    EYE_L_OUT = [226, 247, 30, 29, 27, 28, 56, 190, 243, 112, 26, 22, 23, 24, 110, 25]
+    EYE_R_OUT = [446, 467, 260, 259, 257, 258, 286, 414, 463, 341, 256, 252, 253, 254, 339, 255]
+    BROW_L = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
+    BROW_R = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]
+    NOSE_MID = [1, 2, 4, 5, 6, 19, 94, 195, 197, 168]
+    NOSE_L = [129, 98, 64, 240, 219, 235, 48, 115, 220, 49, 131]
+    NOSE_R = [358, 327, 294, 460, 439, 455, 278, 344, 440, 279, 360]
+    LIP_UP_OUT = [409, 270, 269, 267, 0, 37, 39, 40, 185]
+    LIP_UP_IN = [415, 310, 311, 312, 13, 82, 81, 80, 191]
+    LIP_LO_OUT = [146, 91, 181, 84, 17, 314, 405, 321, 375]
+    LIP_LO_IN = [95, 88, 178, 87, 14, 317, 402, 318, 324]
+    MOUTH_ALL = [61, 291, 78, 308] + LIP_UP_OUT + LIP_UP_IN + LIP_LO_OUT + LIP_LO_IN
+    FOREHEAD = [10, 338, 297, 332, 284, 109, 67, 103, 54, 151, 9, 108, 337, 69, 299]
+    CHIN = [152, 148, 176, 377, 400, 378, 149, 175, 199, 200, 18, 421, 201]
+    JAW_L = [172, 136, 150, 149, 176, 58, 132]
+    JAW_R = [397, 365, 379, 378, 400, 288, 361]
+    CHEEK_L = [234, 93, 132, 127, 162, 137, 177, 215, 213, 192]
+    CHEEK_R = [454, 323, 361, 356, 389, 366, 401, 435, 433, 416]
+
+    FACE_SHAPE_PARAMS = ['eye_size', 'eye_height', 'eye_width', 'eye_tilt', 'eye_distance', 'nose_height', 'nose_width',
+                         'smile', 'upper_lip', 'lower_lip', 'mouth_width', 'mouth_height',
+                         'forehead', 'chin_height', 'jawline', 'face_width']
+
+    def edit_face_shape(self, eyes='both', **v):
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        v = {k: float(np.clip(v.get(k, 0) or 0, -100, 100)) / 100 for k in self.FACE_SHAPE_PARAMS}
+        if not any(v.values()):
+            raise ValueError('바꿀 값이 없습니다')
+        from retouch import paste_back, paste_mask
+        face_size = 1024
+        M, side = C.crop_transform(pts, face_size)
+        crop = cv2.warpAffine(self.base, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        pc = C.apply_affine(M, pts)
+        _, fw, _ = C.face_frame(pc)
+        d = np.zeros_like(pc)
+        face_cx = pc[C.FACE_OVAL][:, 0].mean()
+
+        def scale_about(idx, centre, sx, sy, w=1.0):
+            for i in idx:
+                d[i] += ((pc[i] - centre) * (np.array([sx, sy]) - 1)) * w
+
+        def rotate_about(idx, centre, deg, w=1.0):
+            R = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])), deg, 1.0)
+            for i in idx:
+                d[i] += (C.apply_affine(R, pc[i][None])[0] - pc[i]) * w
+
+        def shift(idx, dx, dy, w=1.0):
+            for i in idx:
+                d[i] += (dx * fw * w, dy * fw * w)
+
+        # eyes — 'left' is the image-left eye
+        for side_name, inner, outer, brow in (('left', self.EYE_L_IN, self.EYE_L_OUT, self.BROW_L), ('right', self.EYE_R_IN, self.EYE_R_OUT, self.BROW_R)):
+            if eyes not in ('both', side_name):
+                continue
+            c = pc[inner].mean(0)
+            out = 1.0 if c[0] > face_cx else -1.0
+            sx = 1 + 0.18 * v['eye_size'] + 0.18 * v['eye_width']
+            sy = 1 + 0.22 * v['eye_size'] + 0.25 * v['eye_height']
+            scale_about(inner, c, sx, sy); scale_about(outer, c, sx, sy, 0.45)
+            if v['eye_tilt']:
+                # positive tilts the outer corners up on both sides, like Photoshop
+                rotate_about(inner + outer, c, out * 10 * v['eye_tilt'])
+                rotate_about(brow, c, out * 6 * v['eye_tilt'], 0.5)
+            if v['eye_distance']:
+                shift(inner + outer + brow, out * 0.035 * v['eye_distance'], 0)
+        # nose
+        if v['nose_height']:
+            shift(self.NOSE_MID + self.NOSE_L + self.NOSE_R, 0, -0.03 * v['nose_height'])
+        if v['nose_width']:
+            shift(self.NOSE_L, -0.03 * v['nose_width'], 0); shift(self.NOSE_R, 0.03 * v['nose_width'], 0)
+            shift([1, 4, 2, 19, 94], 0, 0.004 * v['nose_width'])
+        # mouth
+        mc = pc[self.MOUTH_ALL].mean(0)
+        if v['smile']:
+            for group, k in ((self.LIP_OUTER, 1.0), (self.LIP_INNER, 0.9)):
+                for i, w in group.items():
+                    out = 1.0 if pc[i, 0] > mc[0] else -1.0
+                    d[i] += (out * 0.018 * w * k * v['smile'] * fw, -0.032 * w * k * v['smile'] * fw)
+            for i in self.CHEEKS:
+                out = 1.0 if pc[i, 0] > mc[0] else -1.0
+                d[i] += (out * 0.004 * v['smile'] * fw, -0.012 * v['smile'] * fw)
+        if v['upper_lip']:
+            shift(self.LIP_UP_OUT, 0, -0.012 * v['upper_lip']); shift(self.LIP_UP_IN, 0, 0.004 * v['upper_lip'])
+        if v['lower_lip']:
+            shift(self.LIP_LO_OUT, 0, 0.012 * v['lower_lip']); shift(self.LIP_LO_IN, 0, -0.004 * v['lower_lip'])
+        if v['mouth_width'] or v['mouth_height']:
+            scale_about(self.MOUTH_ALL, mc, 1 + 0.15 * v['mouth_width'], 1 + 0.15 * v['mouth_height'])
+        # face shape
+        if v['forehead']:
+            shift(self.FOREHEAD, 0, -0.04 * v['forehead'])
+        if v['chin_height']:
+            shift(self.CHIN, 0, 0.035 * v['chin_height'])
+        if v['jawline']:
+            shift(self.JAW_L, -0.03 * v['jawline'], 0); shift(self.JAW_R, 0.03 * v['jawline'], 0)
+        if v['face_width']:
+            shift(self.CHEEK_L, -0.04 * v['face_width'], 0); shift(self.CHEEK_R, 0.04 * v['face_width'], 0)
+            shift(self.JAW_L, -0.02 * v['face_width'], 0); shift(self.JAW_R, 0.02 * v['face_width'], 0)
+
+        target = pc + d
+        anchors = C.anchor_points(pc, side)
+        warped = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
+        label = ' '.join(f'{k}{int(round(x * 100)):+d}' for k, x in v.items() if x)
+        self.snapshot('얼굴 ' + label[:24])
+        self.base = paste_back(self.base, warped, M, paste_mask(pc, side, face_size))
+        self.pts_checked = False
+        return label
+
     def edit_mouth_from(self, donor_name):
         """Take the mouth from another photo of the same person — the only way
         to get real teeth into a closed-mouth shot. Aligns on nose, cheeks and
@@ -779,6 +892,7 @@ smooth_skin 은 얼굴 피부만 부드럽게(0~1). face_models 는 사용자의
 crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)은 save 의 size 로 처리되며 가운데 기준으로 잘립니다.
 
 기울기: 카메라가 기울어 사진 전체가 삐딱하면 straighten, 몸은 바른데 고개만 갸웃하면 head_tilt(±12°까지, 그 이상은 못 한다고 말할 것). 눈 감은 사진은 eyes_from 으로 같은 사람의 다른 사진에서 눈을 가져오는 방법뿐입니다 — 없는 눈을 만들어내지는 못하니, 사용자가 donor 사진을 지정하지 않았으면 폴더의 다른 사진 중 무엇을 쓸지 물어보세요.
+얼굴 리퀴파이(face_shape)는 포토샵 얼굴 인식 리퀴파이와 같은 슬라이더입니다. "눈 좀 크게" → eye_size 25, "턱 갸름하게" → jawline -30 face_width -15 식으로 작은 값부터, 결과를 보고 올립니다.
 표정: 살짝 미소·인상 풀기는 expression(워핑). 이가 보이는 활짝 웃음은 워핑으로 안 되고 mouth_from 으로 같은 사람의 웃는 컷에서 입을 가져오는 방법뿐입니다. 없는 이를 만들어내지는 못한다고 분명히 말하세요. 표정을 바꾼 뒤엔 미리보기를 보고 부자연스러우면 강도를 낮추거나 undo 합니다.
 포토샵식 도구: curves(커브) · hsl(색 범위별 색조/채도/명도) · dodge_burn(국소 밝기) · clone(도장) · vignette · denoise(야간 노이즈) · background(배경 흐림/단색/투명) · liquify(자유 밀기) · perspective(간판·가격표 펴기). 사용자가 포토샵 용어로 말하면 대응되는 도구를 고르고, 국소 도구는 zoom 으로 위치를 확인한 뒤 씁니다.
 저장(save)은 사용자가 저장하라고 할 때만 합니다. 되돌리기는 undo. 요청이 애매하면 한 줄로 되묻습니다. 사진 속 인물에 대한 평가는 하지 않습니다."""
@@ -841,6 +955,9 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'eyes_from':
                 self.edit_eyes_from(inp['donor'], inp.get('which', 'both'))
                 return f"{inp['donor']} 의 눈을 옮겨 붙였습니다", self.render()
+            if name == 'face_shape':
+                label = self.edit_face_shape(inp.pop('eyes', 'both'), **inp)
+                return f'얼굴 리퀴파이 적용: {label}', self.render()
             if name == 'expression':
                 self.edit_expression(float(inp.get('smile', 0)), float(inp.get('relax_brow', 0)))
                 return '표정 워핑 적용', self.render()
@@ -912,6 +1029,8 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
     {'name': 'eyes_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 눈을 가져와 붙인다. 눈 감은 사진 구제용. 같은 촬영·비슷한 각도의 사진이어야 한다. which: both | left | right.',
      'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}, 'which': {'type': 'string', 'enum': ['both', 'left', 'right']}}, 'required': ['donor']}},
+    {'name': 'face_shape', 'description': '포토샵 얼굴 인식 리퀴파이. 값은 -100~100, 0=그대로. 눈: eye_size · eye_height · eye_width · eye_tilt(+ 눈꼬리 올림) · eye_distance(+ 멀어짐), eyes=both|left|right(left=사진 왼쪽 눈). 코: nose_height(+ 위로) · nose_width. 입: smile · upper_lip(+ 두껍게) · lower_lip · mouth_width · mouth_height. 얼굴형: forehead(+ 이마 높게) · chin_height(+ 턱 길게) · jawline(+ 턱선 넓게, - 갸름) · face_width(+ 넓게, - 갸름). 20~40 정도가 자연스럽고 60 넘으면 티가 난다.',
+     'input_schema': {'type': 'object', 'properties': {**{k: {'type': 'number', 'minimum': -100, 'maximum': 100} for k in Session.FACE_SHAPE_PARAMS}, 'eyes': {'type': 'string', 'enum': ['both', 'left', 'right']}}}},
     {'name': 'expression', 'description': '표정을 워핑으로 바꾼다(픽셀을 새로 만들지 않음). smile -1~1: 입꼬리·볼을 올려 살짝 미소(0.3 은은, 0.6 분명, 1 최대 — 그 이상은 부자연). relax_brow 0~1: 찌푸린 눈썹 사이를 벌리고 올려 인상을 푼다. 입을 벌리거나 이를 보이게는 못 한다.',
      'input_schema': {'type': 'object', 'properties': {'smile': {'type': 'number', 'minimum': -1, 'maximum': 1}, 'relax_brow': {'type': 'number', 'minimum': 0, 'maximum': 1}}}},
     {'name': 'mouth_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 입을 가져와 붙인다. 이 보이는 웃음은 이 방법뿐(진짜 이가 필요). 같은 촬영·비슷한 각도여야 하고, 볼·눈은 안 바뀌므로 자연스러운지 결과를 꼭 확인할 것.',
