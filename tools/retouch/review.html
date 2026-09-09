@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보정 검수 — Korea Rundown</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f25; --line:#2c313a; --text:#e6e8ec; --muted:#969db0; --ok:#4cc38a; --bad:#ff7b72; --accent:#5aa9ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  h1 { font-size:15px; margin:0 8px 0 0; font-weight:600; }
+  label.file, button { background:#262b33; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 11px; font:inherit; cursor:pointer; }
+  input[type=file] { display:none; }
+  .spacer { flex:1; }
+  .chip { color:var(--muted); font-size:12px; }
+  main { flex:1; display:flex; gap:10px; padding:12px; min-height:0; }
+  figure { flex:1; margin:0; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  figcaption { color:var(--muted); font-size:12px; text-align:center; }
+  .frame { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#0e1013; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  img { max-width:100%; max-height:100%; display:block; }
+  footer { display:flex; align-items:center; gap:14px; padding:10px 14px; border-top:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  .tag { padding:4px 12px; border-radius:20px; font-weight:600; border:1px solid var(--line); }
+  .tag.ok { color:var(--ok); border-color:var(--ok); }
+  .tag.bad { color:var(--bad); border-color:var(--bad); }
+  kbd { background:#262b33; border:1px solid var(--line); border-radius:4px; padding:1px 6px; font-size:12px; }
+  textarea { width:100%; height:120px; background:#0e1013; color:var(--text); border:1px solid var(--line); border-radius:6px; font:12px monospace; padding:8px; }
+  #list { display:none; padding:0 14px 12px; background:var(--panel); }
+</style>
+</head>
+<body>
+<header>
+  <h1>보정 검수</h1>
+  <label class="file">원본 폴더<input id="pickA" type="file" webkitdirectory multiple></label>
+  <label class="file">보정 폴더<input id="pickB" type="file" webkitdirectory multiple></label>
+  <span class="chip" id="status">두 폴더를 고르면 같은 이름끼리 짝지어 보여줍니다</span>
+  <span class="spacer"></span>
+  <button id="showList">손봐야 할 목록</button>
+</header>
+<main>
+  <figure><figcaption>원본</figcaption><div class="frame"><img id="imgA"></div></figure>
+  <figure><figcaption>보정</figcaption><div class="frame"><img id="imgB"></div></figure>
+</main>
+<footer>
+  <span id="tag" class="tag">미확인</span>
+  <span class="chip"><kbd>←</kbd> <kbd>→</kbd> 넘기기 · <kbd>1</kbd> OK · <kbd>2</kbd> 손봐야 함 · <kbd>0</kbd> 표시 지우기 · <kbd>Space</kbd> 원본/보정 겹쳐 보기</span>
+  <span class="spacer"></span>
+  <span class="chip" id="counts"></span>
+</footer>
+<div id="list"><textarea id="listText" readonly></textarea></div>
+<script>
+"use strict";
+const base = f => f.name.replace(/\.[^.]+$/, '').replace(/-fix$/, '');
+const isImg = f => /\.(jpe?g|png|webp)$/i.test(f.name);
+let A = new Map(), B = new Map(), keys = [], i = -1, marks = {}, storeKey = '', urlA = '', urlB = '', overlay = false;
+
+function pick(which, files) {
+  const m = new Map();
+  for (const f of files) if (isImg(f)) m.set(base(f), f);
+  if (which === 'A') A = m; else B = m;
+  keys = [...A.keys()].filter(k => B.has(k)).sort();
+  storeKey = 'review:' + keys.slice(0, 5).join('|') + ':' + keys.length;
+  try { marks = JSON.parse(localStorage.getItem(storeKey) || '{}'); } catch { marks = {}; }
+  i = keys.length ? 0 : -1;
+  show();
+}
+
+function show() {
+  const st = document.getElementById('status');
+  if (i < 0) { st.textContent = A.size || B.size ? '짝이 맞는 파일이 없습니다 (같은 파일명이어야 합니다)' : '두 폴더를 고르면 같은 이름끼리 짝지어 보여줍니다'; return; }
+  const k = keys[i];
+  const a = document.getElementById('imgA'), b = document.getElementById('imgB');
+  if (urlA) URL.revokeObjectURL(urlA); if (urlB) URL.revokeObjectURL(urlB);
+  urlA = URL.createObjectURL(A.get(k)); urlB = URL.createObjectURL(B.get(k));
+  a.src = urlA; b.src = overlay ? urlA : urlB;
+  st.textContent = `${i + 1} / ${keys.length} · ${A.get(k).name}`;
+  const t = document.getElementById('tag'), m = marks[k];
+  t.className = 'tag' + (m ? ' ' + m : ''); t.textContent = m === 'ok' ? 'OK' : m === 'bad' ? '손봐야 함' : '미확인';
+  const ok = Object.values(marks).filter(v => v === 'ok').length, bad = Object.values(marks).filter(v => v === 'bad').length;
+  document.getElementById('counts').textContent = `OK ${ok} · 손봐야 함 ${bad} · 미확인 ${keys.length - ok - bad}`;
+}
+
+function mark(v) {
+  if (i < 0) return;
+  if (v) marks[keys[i]] = v; else delete marks[keys[i]];
+  try { localStorage.setItem(storeKey, JSON.stringify(marks)); } catch {}
+  if (v && i < keys.length - 1) i++;
+  show();
+}
+
+document.getElementById('pickA').addEventListener('change', e => pick('A', e.target.files));
+document.getElementById('pickB').addEventListener('change', e => pick('B', e.target.files));
+document.getElementById('showList').addEventListener('click', () => {
+  const box = document.getElementById('list');
+  box.style.display = box.style.display === 'block' ? 'none' : 'block';
+  document.getElementById('listText').value = keys.filter(k => marks[k] === 'bad').map(k => A.get(k).name).join('\n');
+});
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || i < 0) return;
+  if (e.key === 'ArrowLeft' && i > 0) { i--; show(); }
+  else if (e.key === 'ArrowRight' && i < keys.length - 1) { i++; show(); }
+  else if (e.key === '1') mark('ok');
+  else if (e.key === '2') mark('bad');
+  else if (e.key === '0') mark(null);
+  else if (e.key === ' ') {
+    e.preventDefault(); overlay = !overlay;
+    document.getElementById('imgB').src = overlay ? urlA : urlB;   // same spot, flip to spot the change
+  }
+});
+</script>
+</body>
+</html>

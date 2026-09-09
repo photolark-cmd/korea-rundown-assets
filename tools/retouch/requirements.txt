@@ -1,0 +1,8 @@
+# python -m pip install -r tools/retouch/requirements.txt
+# GPU 학습용 torch는 https://pytorch.org/get-started/locally/ 의 CUDA 빌드로 따로 설치
+numpy
+opencv-python-headless
+mediapipe>=0.10
+pillow
+torch
+torchvision

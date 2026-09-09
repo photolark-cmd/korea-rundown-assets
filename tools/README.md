@@ -10,6 +10,7 @@ CSV 한 줄 = PNG 한 장. 도구는 두 개입니다.
 | `grab-frames.mjs` | **편집 영상에서 본문 이미지 추출** | — |
 | `photo-fix/index.html` | **사진 보정** (원본 ↔ 보정본 비교, 브라우저에서 실행) | — |
 | `learn-preset.mjs` | **before/after 쌍에서 보정 프리셋 학습** | — |
+| `retouch/` | **인물 사진 일괄 보정** — 잡티·피부·얼굴형을 본인 쌍으로 학습 (Python, GPU) | — |
 
 디자인은 전부 템플릿에 있고, 스크립트는 값을 채워 넣고 크기를 맞춘 뒤 캡처만 합니다.
 아래 **폰트** 절은 두 도구에 공통으로 적용됩니다.
@@ -329,3 +330,10 @@ node tools/learn-preset.mjs <before-after-폴더> --name "야간 편의점"
 ```
 
 자세한 내용: [`photo-fix/README.md`](photo-fix/README.md)
+
+## 인물 사진 일괄 보정 (`retouch/`)
+
+원본/보정본 쌍 몇백 장으로 잡티·피부 결·얼굴형 변형까지 학습해 새 사진에 일괄 적용합니다.
+PC(GPU)에서 돌리는 Python 파이프라인이고, 검수는 `retouch/review.html`로 합니다.
+
+자세한 내용: [`retouch/README.md`](retouch/README.md)
