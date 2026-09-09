@@ -193,11 +193,13 @@ def face_masks(pts, side, face_size):
     skin = cv2.erode(skin, _disc(6 * k))
     holes = np.zeros_like(skin)
     _poly(holes, pts, LEFT_EYE); _poly(holes, pts, RIGHT_EYE)
-    _hull(holes, pts, LEFT_BROW); _hull(holes, pts, RIGHT_BROW)
     _poly(holes, pts, LIPS)
-    holes = cv2.dilate(holes, _disc(18 * k))
+    holes = cv2.dilate(holes, _disc(7 * k))
+    brows = np.zeros_like(skin)
+    _hull(brows, pts, LEFT_BROW); _hull(brows, pts, RIGHT_BROW)
+    holes = np.maximum(holes, cv2.dilate(brows, _disc(4 * k)))
     skin[holes > 0] = 0
-    skin = cv2.GaussianBlur(skin, (0, 0), 6 * k + 1)
+    skin = cv2.GaussianBlur(skin, (0, 0), 4 * k + 1)
 
     gate = np.zeros((side, side), np.uint8)
     _poly(gate, pts, FACE_OVAL)

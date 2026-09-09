@@ -686,7 +686,7 @@ class Session:
         self.snapshot('노이즈 제거')
         self.base = cv2.fastNlMeansDenoisingColored(self.base, None, h, h, 7, 21)
 
-    def person_mask(self):
+    def person_mask(self, refine=True):
         """Person/background matte from MediaPipe's selfie segmenter (0..1)."""
         if getattr(self, '_seg', None) is None:
             import urllib.request
@@ -705,17 +705,57 @@ class Session:
         m = res.confidence_masks[0].numpy_view()[..., 0].astype(np.float32)
         if (m > 0.5).mean() < 0.01:
             raise ValueError('사람을 찾지 못해 배경을 분리할 수 없습니다')
+        if refine:
+            m = self._grabcut_refine(small, m)
         h, w = self.base.shape[:2]
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
         return cv2.GaussianBlur(m, (0, 0), max(1.0, w * 0.003))
 
-    def edit_background(self, mode='blur', strength=0.5, color='#ffffff'):
-        m = self.person_mask()[..., None]
+    @staticmethod
+    def _grabcut_refine(img, m):
+        """The selfie model knows people, not hats, props or held objects. Let
+        GrabCut's colour model reconsider a wide band around the person: on a
+        plain studio backdrop it brings hats and props back."""
+        sw = img.shape[1]
+        gc = np.full(m.shape, cv2.GC_PR_BGD, np.uint8)
+        sure = (m > 0.9).astype(np.uint8)
+        band = cv2.dilate(sure, Session._disc_px(int(sw * 0.18)))
+        gc[band > 0] = cv2.GC_PR_BGD
+        gc[m > 0.6] = cv2.GC_PR_FGD
+        gc[cv2.erode(sure, Session._disc_px(int(sw * 0.02))) > 0] = cv2.GC_FGD
+        gc[band == 0] = cv2.GC_BGD
+        bg, fg = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+        try:
+            cv2.grabCut(img, gc, None, bg, fg, 4, cv2.GC_INIT_WITH_MASK)
+        except cv2.error:
+            return m
+        out = ((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD)).astype(np.uint8)
+        # keep only components touching the original person, drop specks
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(out)
+        keep = np.zeros_like(out)
+        for i in range(1, n):
+            if (m[lab == i] > 0.5).any() or stats[i, cv2.CC_STAT_AREA] > 0.002 * out.size and (cv2.dilate((lab == i).astype(np.uint8), Session._disc_px(int(sw * 0.02))) * sure).any():
+                keep[lab == i] = 1
+        soft = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), max(1.0, sw * 0.002))
+        return np.maximum(soft, m * (keep > 0))
+
+    @staticmethod
+    def _disc_px(r):
+        r = max(1, r)
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+
+    def edit_background(self, mode='blur', strength=0.5, color='#ffffff', refine=True):
+        m = self.person_mask(refine)[..., None]
         h, w = self.base.shape[:2]
         if mode == 'blur':
             k = max(3.0, float(strength) * w * 0.04)
-            bg = cv2.GaussianBlur(self.base, (0, 0), k)
-            out = (self.base * m + bg * (1 - m)).round().astype(np.uint8)
+            # blur only background pixels (normalised convolution) so the person
+            # does not bleed a halo into the blurred backdrop
+            inv = (1 - m).astype(np.float32)
+            num = cv2.GaussianBlur(self.base.astype(np.float32) * inv, (0, 0), k)
+            den = cv2.GaussianBlur(inv[..., 0], (0, 0), k)[..., None]
+            bg = num / np.maximum(den, 1e-3)
+            out = np.clip(self.base * m + bg * (1 - m), 0, 255).round().astype(np.uint8)
             self.snapshot('배경 흐림')
             self.base = out
         elif mode == 'color':
@@ -983,7 +1023,7 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
                 self.edit_denoise(inp.get('strength', 8))
                 return '노이즈 제거 적용', self.render()
             if name == 'background':
-                self.edit_background(inp.get('mode', 'blur'), inp.get('strength', 0.5), inp.get('color', '#ffffff'))
+                self.edit_background(inp.get('mode', 'blur'), inp.get('strength', 0.5), inp.get('color', '#ffffff'), inp.get('refine', True))
                 return ('배경 분리됨 — 저장하면 투명 PNG' if inp.get('mode') == 'transparent' else '배경 처리 적용'), self.render()
             if name == 'liquify':
                 self.edit_liquify(inp['from_x'], inp['from_y'], inp['to_x'], inp['to_y'], inp.get('radius', 0.06))
@@ -1048,7 +1088,7 @@ TOOLS = [
     {'name': 'denoise', 'description': '노이즈 제거(비지역 평균). strength 1~30, 야간 사진은 6~12. 큰 사진은 수십 초 걸린다.',
      'input_schema': {'type': 'object', 'properties': {'strength': {'type': 'number'}}}},
     {'name': 'background', 'description': '사람/배경 분리. mode: blur(배경 흐림, strength 0~1) | color(단색 배경, color "#rrggbb") | transparent(저장 시 투명 PNG). 사람 사진에만.',
-     'input_schema': {'type': 'object', 'properties': {'mode': {'type': 'string', 'enum': ['blur', 'color', 'transparent']}, 'strength': {'type': 'number'}, 'color': {'type': 'string'}}, 'required': ['mode']}},
+     'input_schema': {'type': 'object', 'properties': {'mode': {'type': 'string', 'enum': ['blur', 'color', 'transparent']}, 'strength': {'type': 'number'}, 'color': {'type': 'string'}, 'refine': {'type': 'boolean', 'description': '모자·소품을 색으로 되찾는 GrabCut 보정 (기본 true). 배경이 복잡하면 false'}}, 'required': ['mode']}},
     {'name': 'liquify', 'description': '자유 리퀴파이(앞으로 밀기). (from) 의 픽셀을 (to) 쪽으로 radius(폭 대비, 기본 0.06) 브러시로 민다. 한 번에 반지름의 2배까지. 턱선·어깨·옷 주름 등.',
      'input_schema': {'type': 'object', 'properties': {'from_x': {'type': 'number'}, 'from_y': {'type': 'number'}, 'to_x': {'type': 'number'}, 'to_y': {'type': 'number'}, 'radius': {'type': 'number'}}, 'required': ['from_x', 'from_y', 'to_x', 'to_y']}},
     {'name': 'perspective', 'description': '원근 보정. 네 모서리 [TL, TR, BR, BL] (0~1) 를 정면 직사각형으로 펴고 그 영역만 남긴다. 간판·가격표·화면 촬영에.',
