@@ -24,6 +24,13 @@
   figcaption { color:var(--muted); font-size:12px; text-align:center; }
   .frame { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#0e1013; border:1px solid var(--line); border-radius:8px; overflow:hidden; position:relative; }
   .frame img { max-width:100%; max-height:100%; display:block; }
+  #mark { position:absolute; cursor:crosshair; }
+  #comp { max-width:100%; max-height:100%; display:block; }
+  #mixer { width:90px; vertical-align:middle; accent-color:var(--accent); }
+  body.solo .stage > figure:first-child { display:none; }
+  .marktools { float:right; display:inline-flex; gap:4px; }
+  .marktools button { padding:1px 7px; font-size:11px; border-radius:4px; }
+  .marktools button.on { background:var(--accent); border-color:var(--accent); color:#0b1220; font-weight:600; }
   .empty { color:var(--muted); text-align:center; padding:40px 20px; font-size:13px; }
   aside { width:360px; flex:none; border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
   .chat { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
@@ -75,7 +82,14 @@
 <main>
   <div class="stage">
     <figure><figcaption>원본</figcaption><div class="frame"><img id="imgA" hidden><div class="empty" id="hint">왼쪽 원본 · 오른쪽 결과<br>오른쪽 대화창에서 말로 지시하거나, 아래 슬라이더로 직접 만지세요</div></div></figure>
-    <figure><figcaption>결과</figcaption><div class="frame"><img id="imgB" hidden><div class="busy" id="busy">작업 중…</div></div></figure>
+    <figure>
+      <figcaption><span id="viewTools" class="marktools" style="float:left">
+        <button class="vw on" data-view="side">나란히</button><button class="vw" data-view="over">겹치기</button><button class="vw" data-view="diff">차이</button><input id="mixer" type="range" min="0" max="100" value="100" hidden>
+      </span>결과 <span class="marktools">
+        <button class="mk on" data-mode="point">점</button><button class="mk" data-mode="rect">영역</button><button class="mk" data-mode="path">자유</button><button id="markClear">지우기</button>
+      </span></figcaption>
+      <div class="frame"><img id="imgB" hidden><canvas id="comp" hidden></canvas><canvas id="mark"></canvas><div class="busy" id="busy">작업 중…</div></div>
+    </figure>
   </div>
   <aside>
     <div class="chat" id="chat">
@@ -121,6 +135,7 @@ function show(j) {
   if (j.state) state = j.state;
   if (j.orig) { $('imgA').src = 'data:image/jpeg;base64,' + j.orig; $('imgA').hidden = false; $('hint').hidden = true; }
   if (j.out) { $('imgB').src = 'data:image/jpeg;base64,' + j.out; $('imgB').hidden = false; }
+  setTimeout(compose, 30);
   $('save').disabled = !state.open;
   $('status').textContent = state.open ? `${state.name} · ${state.width}×${state.height}` + (state.auto ? ' · 자동 보정' : '') + (state.undo.length ? ` · 되돌리기 ${state.undo.length}` : '') : '사진을 열거나 아래 필름스트립에서 고르세요';
   if (state.open) { for (const [k] of SLIDERS) { $('r-'+k).value = state.params[k]; $('v-'+k).textContent = fmt(k, state.params[k]); } $('preset').value = state.preset || ''; }
@@ -137,14 +152,166 @@ function addEvent(e) {
   d.textContent = `→ ${e.tool} ${args}` + (e.error ? `  ✗ ${e.error}` : ''); $('chat').appendChild(d);
 }
 
+// ---- 보기 모드: 나란히 / 겹치기 / 차이 ------------------------------------
+// 원본과 결과가 이미 화면에 다 있으므로 브라우저에서 합성한다(서버 왕복 없음).
+let viewMode = 'side';
+
+function compose() {
+  const A = $('imgA'), B = $('imgB'), cv = $('comp');
+  if (viewMode === 'side' || B.hidden || !B.naturalWidth) {
+    cv.hidden = true; B.hidden = !B.src; document.body.classList.remove('solo');
+    markCanvasFit(); return;
+  }
+  document.body.classList.add('solo');
+  B.hidden = true; cv.hidden = false;
+  const w = B.naturalWidth, h = B.naturalHeight;
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  if (viewMode === 'over') {
+    g.globalAlpha = 1; g.drawImage(A, 0, 0, w, h);
+    g.globalAlpha = Number($('mixer').value) / 100;
+    g.drawImage(B, 0, 0, w, h);
+    g.globalAlpha = 1;
+  } else {                                     // 차이: 바뀐 곳만 붉게 얹는다
+    const ca = document.createElement('canvas'); ca.width = w; ca.height = h;
+    ca.getContext('2d').drawImage(A, 0, 0, w, h);
+    const cb = document.createElement('canvas'); cb.width = w; cb.height = h;
+    cb.getContext('2d').drawImage(B, 0, 0, w, h);
+    // 감도: 잡티 제거처럼 미세한 편집은 크게 키워야 보이고, 전체 색 보정처럼
+    // 온 화면이 바뀌는 편집은 낮춰야 어디가 더 바뀌었는지 구분된다.
+    const amp = 1 + Number($('mixer').value) / 100 * 19;
+    const da = ca.getContext('2d').getImageData(0, 0, w, h);
+    const db = cb.getContext('2d').getImageData(0, 0, w, h);
+    const a = da.data, b = db.data;
+    for (let i = 0; i < a.length; i += 4) {
+      const d = Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2]);
+      const k = Math.min(255, d * amp);
+      const grey = (a[i] + a[i+1] + a[i+2]) / 3 * 0.45;
+      a[i] = Math.min(255, grey + k); a[i+1] = grey * (1 - k / 255); a[i+2] = grey * (1 - k / 255);
+    }
+    g.putImageData(da, 0, 0);
+  }
+  markCanvasFit();
+}
+
+function initViews() {
+  document.querySelectorAll('#viewTools .vw').forEach(b => {
+    b.addEventListener('click', () => {
+      viewMode = b.dataset.view;
+      document.querySelectorAll('#viewTools .vw').forEach(x => x.classList.toggle('on', x === b));
+      const mx = $('mixer');
+      mx.hidden = viewMode === 'side';
+      mx.title = viewMode === 'over' ? '결과 불투명도' : '차이 감도';
+      mx.value = viewMode === 'over' ? 100 : 26;      // 감도 26 ≈ 5배
+      compose();
+    });
+  });
+  $('mixer').addEventListener('input', () => { if (viewMode !== 'side') compose(); });
+}
+
+// ---- 화면에 직접 표시하기 -------------------------------------------------
+// 좌표는 0~1 비율로 보관한다. 서버가 그 표시를 Claude 에게 보내는 그림에 그려 준다.
+let marks = [], markMode = 'point', drawing = null;
+
+function markCanvasFit() {
+  const cvv = $('comp');
+  const img = (viewMode !== 'side' && !cvv.hidden) ? cvv : $('imgB');
+  const cv = $('mark');
+  if (img.hidden || !img.clientWidth) { cv.style.display = 'none'; return; }
+  cv.style.display = 'block';
+  const r = img.getBoundingClientRect(), p = cv.parentElement.getBoundingClientRect();
+  cv.style.left = (r.left - p.left) + 'px';
+  cv.style.top = (r.top - p.top) + 'px';
+  cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+  cv.style.width = r.width + 'px'; cv.style.height = r.height + 'px';
+  drawMarks();
+}
+
+function drawMarks() {
+  const cv = $('mark'), g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
+  const X = v => v * cv.width, Y = v => v * cv.height;
+  const all = drawing ? marks.concat([drawing]) : marks;
+  all.forEach((m, i) => {
+    g.lineWidth = 2; g.strokeStyle = '#ff3b30'; g.fillStyle = '#ff3b30';
+    g.font = 'bold 13px sans-serif';
+    if (m.type === 'point') {
+      const x = X(m.x), y = Y(m.y), r = Math.max(8, cv.width * 0.02);
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.stroke();
+      g.beginPath(); g.moveTo(x - r / 2, y); g.lineTo(x + r / 2, y);
+      g.moveTo(x, y - r / 2); g.lineTo(x, y + r / 2); g.stroke();
+      g.fillText(String(i + 1), x + r + 3, y - r);
+    } else if (m.type === 'rect') {
+      g.strokeRect(X(m.x0), Y(m.y0), X(m.x1 - m.x0), Y(m.y1 - m.y0));
+      g.fillText(String(i + 1), X(Math.min(m.x0, m.x1)) + 3, Y(Math.min(m.y0, m.y1)) - 4);
+    } else if (m.type === 'path' && m.points.length > 1) {
+      g.beginPath(); g.moveTo(X(m.points[0][0]), Y(m.points[0][1]));
+      for (const q of m.points.slice(1)) g.lineTo(X(q[0]), Y(q[1]));
+      g.stroke();
+      g.fillText(String(i + 1), X(m.points[0][0]) + 3, Y(m.points[0][1]) - 4);
+    }
+  });
+  $('markClear').textContent = marks.length ? ('지우기 ' + marks.length) : '지우기';
+}
+
+function relPos(e) {
+  const cv = $('mark'), r = cv.getBoundingClientRect();
+  return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+          Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+}
+
+function initMarks() {
+  const cv = $('mark');
+  cv.addEventListener('pointerdown', e => {
+    if (!state.open) return;
+    cv.setPointerCapture(e.pointerId);
+    const [x, y] = relPos(e);
+    if (markMode === 'point') { marks.push({type: 'point', x, y}); drawMarks(); return; }
+    drawing = markMode === 'rect' ? {type: 'rect', x0: x, y0: y, x1: x, y1: y}
+                                  : {type: 'path', points: [[x, y]]};
+    drawMarks();
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!drawing) return;
+    const [x, y] = relPos(e);
+    if (drawing.type === 'rect') { drawing.x1 = x; drawing.y1 = y; }
+    else { const p = drawing.points[drawing.points.length - 1];
+           if (Math.hypot(x - p[0], y - p[1]) > 0.004) drawing.points.push([x, y]); }
+    drawMarks();
+  });
+  cv.addEventListener('pointerup', () => {
+    if (!drawing) return;
+    if (drawing.type === 'rect') {
+      const r = drawing;
+      if (Math.abs(r.x1 - r.x0) > 0.01 && Math.abs(r.y1 - r.y0) > 0.01) {
+        marks.push({type: 'rect', x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1),
+                    x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1)});
+      }
+    } else if (drawing.points.length > 1) marks.push(drawing);
+    drawing = null; drawMarks();
+  });
+  document.querySelectorAll('.marktools .mk').forEach(b => {
+    b.addEventListener('click', () => {
+      markMode = b.dataset.mode;
+      document.querySelectorAll('.marktools .mk').forEach(x => x.classList.toggle('on', x === b));
+    });
+  });
+  $('markClear').addEventListener('click', () => { marks = []; drawing = null; drawMarks(); });
+  $('imgB').addEventListener('load', markCanvasFit);
+  addEventListener('resize', markCanvasFit);
+}
+
 async function send() {
   const text = $('text').value.trim();
   if (!text || busy) return;
   if (!state.open) { addMsg('sys', '먼저 사진을 여세요'); return; }
   $('text').value = ''; addMsg('me', text); setBusy(true);
+  const sent = marks.slice();
+  if (sent.length) addMsg('sys', '화면 표시 ' + sent.length + '개 함께 보냄');
   const thinking = addMsg('sys', '생각 중…');
   try {
-    const j = await api('/api/chat', {text});
+    const j = await api('/api/chat', {text, marks: sent});
+    if (sent.length) { marks = []; drawMarks(); }   // 한 번 쓴 표시는 지운다
     thinking.remove();
     (j.events || []).forEach(addEvent);
     addMsg('ai', j.reply); show(j);
@@ -256,6 +423,8 @@ function buildPanel() {
 }
 
 buildFacePanel();
+initMarks();
+initViews();
 $('faceReset').addEventListener('click', () => { resetFaceUI(); sendFace(); });
 $('eyesSel').addEventListener('change', () => { if (Object.values(faceVals).some(x => x)) sendFace(); });
 $('openFolder').addEventListener('click', () => browse('folder'));

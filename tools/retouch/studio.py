@@ -66,6 +66,70 @@ def jpeg_b64(img, quality=85):
     return base64.b64encode(buf.tobytes()).decode('ascii')
 
 
+def draw_marks(img, marks):
+    """사용자가 화면에서 표시한 곳을 그림 위에 그린다 (원본은 안 건드림).
+    좌표는 전부 0~1 비율, 원점 왼쪽 위."""
+    out = img.copy()
+    h, w = out.shape[:2]
+    t = max(2, int(round(min(h, w) * 0.004)))
+    RED, WHITE = (60, 60, 255), (255, 255, 255)
+
+    def px(pt):
+        return int(round(pt[0] * w)), int(round(pt[1] * h))
+
+    for i, m in enumerate(marks or [], 1):
+        kind = m.get('type')
+        try:
+            if kind == 'point':
+                c = px((m['x'], m['y']))
+                r = max(6, int(min(h, w) * 0.02))
+                cv2.circle(out, c, r + t, WHITE, t)
+                cv2.circle(out, c, r, RED, t)
+                cv2.line(out, (c[0] - r // 2, c[1]), (c[0] + r // 2, c[1]), RED, max(1, t // 2))
+                cv2.line(out, (c[0], c[1] - r // 2), (c[0], c[1] + r // 2), RED, max(1, t // 2))
+                label_at = (c[0] + r + t, c[1] - r)
+            elif kind == 'rect':
+                a, b = px((m['x0'], m['y0'])), px((m['x1'], m['y1']))
+                cv2.rectangle(out, a, b, WHITE, t + 2)
+                cv2.rectangle(out, a, b, RED, t)
+                label_at = (min(a[0], b[0]), max(0, min(a[1], b[1]) - t * 2))
+            elif kind == 'path' and len(m.get('points') or []) > 1:
+                pts = np.array([px(q) for q in m['points']], np.int32)
+                cv2.polylines(out, [pts], False, WHITE, t + 2)
+                cv2.polylines(out, [pts], False, RED, t)
+                label_at = (int(pts[0][0]), max(0, int(pts[0][1]) - t * 2))
+            else:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        f = max(0.5, min(h, w) / 900)
+        cv2.putText(out, str(i), label_at, cv2.FONT_HERSHEY_SIMPLEX, f, WHITE, int(t * 2.5), cv2.LINE_AA)
+        cv2.putText(out, str(i), label_at, cv2.FONT_HERSHEY_SIMPLEX, f, RED, t, cv2.LINE_AA)
+    return out
+
+
+def marks_text(marks):
+    """표시한 곳을 글로도 적는다 — 그림으로 보되 좌표는 정확히 읽으라고."""
+    bits = []
+    for i, m in enumerate(marks or [], 1):
+        k = m.get('type')
+        try:
+          if k == 'point':
+            bits.append('%d번 점 (%.3f, %.3f)' % (i, m['x'], m['y']))
+          elif k == 'rect':
+            bits.append('%d번 영역 (%.3f, %.3f)-(%.3f, %.3f)' % (i, m['x0'], m['y0'], m['x1'], m['y1']))
+          elif k == 'path':
+            q = m.get('points') or []
+            if q:
+                xs = [p[0] for p in q]
+                ys = [p[1] for p in q]
+                bits.append('%d번 그린 선 %d점, 범위 (%.3f, %.3f)-(%.3f, %.3f)'
+                            % (i, len(q), min(xs), min(ys), max(xs), max(ys)))
+        except (KeyError, TypeError, ValueError):
+            continue          # 망가진 표시 하나가 지시 전체를 막지 않게
+    return ' · '.join(bits)
+
+
 def image_block(img, mx, quality=80):
     return {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': jpeg_b64(downscale(img, mx), quality)}}
 
@@ -1411,13 +1475,21 @@ class Session:
         import cli_backend
         return 'cli' if cli_backend.available() else 'api'
 
-    def chat(self, text):
+    def chat(self, text, marks=None):
         if self.base is None:
             return '먼저 사진을 여세요.', []
         import anthropic
         import cli_backend
-        content = [{'type': 'text', 'text': f'[현재 상태] {self.state_text()}\n[현재 결과 미리보기]'},
-                   image_block(self.render(), VIEW_MAX),
+        view = self.render()
+        head = f'[현재 상태] {self.state_text()}\n[현재 결과 미리보기]'
+        if marks:
+            # 좌표만 글로 넘기면 그 자리가 어디인지 눈으로 못 본다. 표시를 그림에도 그린다.
+            view = draw_marks(view, marks)
+            head += ('\n[사용자가 화면에 직접 표시한 곳 — 미리보기에 빨간 표시로 그려져 있습니다] '
+                     + marks_text(marks)
+                     + '\n지시가 가리키는 대상은 이 표시입니다. 좌표는 0~1 비율, 원점은 왼쪽 위.')
+        content = [{'type': 'text', 'text': head},
+                   image_block(view, VIEW_MAX),
                    {'type': 'text', 'text': text}]
         self.messages.append({'role': 'user', 'content': content})
         events = []
@@ -1823,7 +1895,7 @@ class Handler(BaseHTTPRequestHandler):
                     path = s.save(body.get('size', 'orig'))
                 return self._json({'path': path, **self._previews()})
             if self.path == '/api/chat':
-                reply, events = s.chat(body.get('text', '').strip())
+                reply, events = s.chat(body.get('text', '').strip(), body.get('marks'))
                 return self._json({'reply': reply, 'events': events, **self._previews()})
             self.send_error(404)
         except Exception as e:
