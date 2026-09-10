@@ -7,6 +7,9 @@
 <style>
   :root { --bg:#14161a; --panel:#1c1f25; --line:#2c313a; --text:#e6e8ec; --muted:#969db0; --accent:#5aa9ff; --me:#243247; --ai:#22262e; }
   * { box-sizing:border-box; }
+  /* .frame img 의 display:block 이 hidden 속성을 이겨서, 숨겼다고 생각한 이미지가
+     계속 보이고 있었다(확대 캔버스가 그 뒤에 가려짐). 속성 쪽을 항상 이기게 둔다. */
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif; height:100vh; display:flex; flex-direction:column; }
   header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
   h1 { font-size:15px; margin:0 8px 0 0; font-weight:600; }
@@ -25,7 +28,7 @@
   .frame { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#0e1013; border:1px solid var(--line); border-radius:8px; overflow:hidden; position:relative; }
   .frame img { max-width:100%; max-height:100%; display:block; }
   #mark { position:absolute; cursor:crosshair; }
-  #comp { max-width:100%; max-height:100%; display:block; }
+  #comp, #compA { max-width:100%; max-height:100%; display:block; }
   #mixer { width:90px; vertical-align:middle; accent-color:var(--accent); }
   body.solo .stage > figure:first-child { display:none; }
   .marktools { float:right; display:inline-flex; gap:4px; }
@@ -81,12 +84,12 @@
 </header>
 <main>
   <div class="stage">
-    <figure><figcaption>원본</figcaption><div class="frame"><img id="imgA" hidden><div class="empty" id="hint">왼쪽 원본 · 오른쪽 결과<br>오른쪽 대화창에서 말로 지시하거나, 아래 슬라이더로 직접 만지세요</div></div></figure>
+    <figure><figcaption>원본</figcaption><div class="frame"><img id="imgA" hidden><canvas id="compA" hidden></canvas><div class="empty" id="hint">왼쪽 원본 · 오른쪽 결과<br>오른쪽 대화창에서 말로 지시하거나, 아래 슬라이더로 직접 만지세요</div></div></figure>
     <figure>
       <figcaption><span id="viewTools" class="marktools" style="float:left">
         <button class="vw on" data-view="side">나란히</button><button class="vw" data-view="over">겹치기</button><button class="vw" data-view="diff">차이</button><input id="mixer" type="range" min="0" max="100" value="100" hidden>
       </span>결과 <span class="marktools">
-        <button class="mk on" data-mode="point">점</button><button class="mk" data-mode="rect">영역</button><button class="mk" data-mode="path">자유</button><button id="markClear">지우기</button>
+        <button class="mk on" data-mode="point">점</button><button class="mk" data-mode="rect">영역</button><button class="mk" data-mode="path">자유</button><button class="mk" data-mode="zoom">확대</button><button id="zoomAll">전체</button><button id="markClear">지우기</button>
       </span></figcaption>
       <div class="frame"><img id="imgB" hidden><canvas id="comp" hidden></canvas><canvas id="mark"></canvas><div class="busy" id="busy">작업 중…</div></div>
     </figure>
@@ -156,27 +159,84 @@ function addEvent(e) {
 // 원본과 결과가 이미 화면에 다 있으므로 브라우저에서 합성한다(서버 왕복 없음).
 let viewMode = 'side';
 
+// 확대: 화면에서 드래그한 사각형만 보여 준다. 서버를 안 부르고 캔버스로 잘라 그린다.
+// 표시(점·영역)는 언제나 **사진 전체 기준 0~1** 로 보관하고, 그릴 때와 읽을 때만
+// 확대 영역으로 환산한다 — 그래야 확대해 놓고 찍은 점도 제자리에 남는다.
+let zoomRect = null;
+
+function zr() { return zoomRect || {x0: 0, y0: 0, x1: 1, y1: 1}; }
+function imgToView(x, y) {
+  const z = zr();
+  return [(x - z.x0) / (z.x1 - z.x0), (y - z.y0) / (z.y1 - z.y0)];
+}
+function viewToImg(x, y) {
+  const z = zr();
+  return [z.x0 + x * (z.x1 - z.x0), z.y0 + y * (z.y1 - z.y0)];
+}
+
+function fitToFrame(cv) {
+  // 잘라낸 그림을 칸에 꽉 차게 키운다. max-width 만으로는 줄이기만 하므로
+  // 확대했는데 오히려 작아 보인다. 두 칸의 틀 크기가 같으므로 배율도 같아진다.
+  // 재기 전에 제가 설정한 크기를 지운다. 안 지우면 '내가 작게 만든 결과'를 다시 재서
+  // 매번 조금씩 더 작아지는 되먹임에 빠진다(실제로 2px 까지 줄었다).
+  cv.style.width = ''; cv.style.height = '';
+  const box = cv.parentElement.getBoundingClientRect();
+  if (!box.width || !cv.width) return;
+  const k = Math.min(box.width / cv.width, box.height / cv.height);
+  cv.style.width = Math.round(cv.width * k) + 'px';
+  cv.style.height = Math.round(cv.height * k) + 'px';
+}
+
+function drawCrop(cv, src, boxW, boxH) {
+  const z = zr(), w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
+  if (!w) return false;
+  const sx = z.x0 * w, sy = z.y0 * h, sw = (z.x1 - z.x0) * w, sh = (z.y1 - z.y0) * h;
+  cv.width = Math.max(1, Math.round(sw)); cv.height = Math.max(1, Math.round(sh));
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
+  g.drawImage(src, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  fitToFrame(cv);
+  return true;
+}
+
 function compose() {
-  const A = $('imgA'), B = $('imgB'), cv = $('comp');
-  if (viewMode === 'side' || B.hidden || !B.naturalWidth) {
-    cv.hidden = true; B.hidden = !B.src; document.body.classList.remove('solo');
+  const A = $('imgA'), B = $('imgB'), cv = $('comp'), cvA = $('compA');
+  const ready = B.src && B.naturalWidth;
+
+  // 왼쪽(원본) 칸도 **같은 zoomRect** 로 자른다 — 두 칸이 같은 배율·같은 자리를 본다.
+  if (zoomRect && A.src && A.naturalWidth && drawCrop(cvA, A)) {
+    cvA.hidden = false; A.hidden = true;
+  } else {
+    cvA.hidden = true; A.hidden = !A.src;
+  }
+
+  if (viewMode === 'side') {
+    if (ready && zoomRect) { cv.hidden = !drawCrop(cv, B); B.hidden = true; }
+    else { cv.hidden = true; B.hidden = !B.src; }
     markCanvasFit(); return;
   }
-  document.body.classList.add('solo');
+  if (!ready) { cv.hidden = true; B.hidden = !B.src; markCanvasFit(); return; }
   B.hidden = true; cv.hidden = false;
-  const w = B.naturalWidth, h = B.naturalHeight;
+  const z = zr();
+  const w = Math.max(1, Math.round((z.x1 - z.x0) * B.naturalWidth));
+  const h = Math.max(1, Math.round((z.y1 - z.y0) * B.naturalHeight));
   cv.width = w; cv.height = h;
   const g = cv.getContext('2d');
   if (viewMode === 'over') {
-    g.globalAlpha = 1; g.drawImage(A, 0, 0, w, h);
+    const sx = z.x0 * B.naturalWidth, sy = z.y0 * B.naturalHeight;
+    const sw = (z.x1 - z.x0) * B.naturalWidth, sh = (z.y1 - z.y0) * B.naturalHeight;
+    g.globalAlpha = 1; g.drawImage(A, sx, sy, sw, sh, 0, 0, w, h);
     g.globalAlpha = Number($('mixer').value) / 100;
-    g.drawImage(B, 0, 0, w, h);
+    g.drawImage(B, sx, sy, sw, sh, 0, 0, w, h);
     g.globalAlpha = 1;
+    fitToFrame(cv);
   } else {                                     // 차이: 바뀐 곳만 붉게 얹는다
+    const sx = z.x0 * B.naturalWidth, sy = z.y0 * B.naturalHeight;
+    const sw = (z.x1 - z.x0) * B.naturalWidth, sh = (z.y1 - z.y0) * B.naturalHeight;
     const ca = document.createElement('canvas'); ca.width = w; ca.height = h;
-    ca.getContext('2d').drawImage(A, 0, 0, w, h);
+    ca.getContext('2d').drawImage(A, sx, sy, sw, sh, 0, 0, w, h);
     const cb = document.createElement('canvas'); cb.width = w; cb.height = h;
-    cb.getContext('2d').drawImage(B, 0, 0, w, h);
+    cb.getContext('2d').drawImage(B, sx, sy, sw, sh, 0, 0, w, h);
     // 감도: 잡티 제거처럼 미세한 편집은 크게 키워야 보이고, 전체 색 보정처럼
     // 온 화면이 바뀌는 편집은 낮춰야 어디가 더 바뀌었는지 구분된다.
     const amp = 1 + Number($('mixer').value) / 100 * 19;
@@ -191,6 +251,7 @@ function compose() {
     }
     g.putImageData(da, 0, 0);
   }
+  fitToFrame(cv);
   markCanvasFit();
 }
 
@@ -214,8 +275,8 @@ function initViews() {
 let marks = [], markMode = 'point', drawing = null;
 
 function markCanvasFit() {
-  const cvv = $('comp');
-  const img = (viewMode !== 'side' && !cvv.hidden) ? cvv : $('imgB');
+  const comp = $('comp');
+  const img = !comp.hidden ? comp : $('imgB');
   const cv = $('mark');
   if (img.hidden || !img.clientWidth) { cv.style.display = 'none'; return; }
   cv.style.display = 'block';
@@ -230,7 +291,8 @@ function markCanvasFit() {
 function drawMarks() {
   const cv = $('mark'), g = cv.getContext('2d');
   g.clearRect(0, 0, cv.width, cv.height);
-  const X = v => v * cv.width, Y = v => v * cv.height;
+  const X = v => imgToView(v, 0)[0] * cv.width;
+  const Y = v => imgToView(0, v)[1] * cv.height;
   const all = drawing ? marks.concat([drawing]) : marks;
   all.forEach((m, i) => {
     g.lineWidth = 2; g.strokeStyle = '#ff3b30'; g.fillStyle = '#ff3b30';
@@ -252,12 +314,18 @@ function drawMarks() {
     }
   });
   $('markClear').textContent = marks.length ? ('지우기 ' + marks.length) : '지우기';
+  $('zoomAll').classList.toggle('on', !!zoomRect);
+  const z = zr();
+  $('zoomAll').title = zoomRect
+    ? ('확대 ' + (1 / Math.max(z.x1 - z.x0, z.y1 - z.y0)).toFixed(1) + '배 — 눌러서 전체 보기 (사진 더블클릭도 됨)')
+    : '전체 보기';
 }
 
 function relPos(e) {
   const cv = $('mark'), r = cv.getBoundingClientRect();
-  return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
-          Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+  const vx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const vy = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  return viewToImg(vx, vy);      // 표시는 언제나 사진 전체 기준으로 보관
 }
 
 function initMarks() {
@@ -267,8 +335,9 @@ function initMarks() {
     cv.setPointerCapture(e.pointerId);
     const [x, y] = relPos(e);
     if (markMode === 'point') { marks.push({type: 'point', x, y}); drawMarks(); return; }
-    drawing = markMode === 'rect' ? {type: 'rect', x0: x, y0: y, x1: x, y1: y}
-                                  : {type: 'path', points: [[x, y]]};
+    drawing = (markMode === 'rect' || markMode === 'zoom')
+      ? {type: 'rect', zoom: markMode === 'zoom', x0: x, y0: y, x1: x, y1: y}
+      : {type: 'path', points: [[x, y]]};
     drawMarks();
   });
   cv.addEventListener('pointermove', e => {
@@ -283,10 +352,13 @@ function initMarks() {
     if (!drawing) return;
     if (drawing.type === 'rect') {
       const r = drawing;
-      if (Math.abs(r.x1 - r.x0) > 0.01 && Math.abs(r.y1 - r.y0) > 0.01) {
-        marks.push({type: 'rect', x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1),
-                    x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1)});
-      }
+      const box = {x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1),
+                   x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1)};
+      const big = (box.x1 - box.x0) > 0.01 && (box.y1 - box.y0) > 0.01;
+      if (r.zoom) {
+        // 드래그한 곳으로 확대. 너무 작게 끌면 사고이므로 최소 1% 는 남긴다.
+        if (big) { zoomRect = box; drawing = null; compose(); return; }
+      } else if (big) marks.push(box);
     } else if (drawing.points.length > 1) marks.push(drawing);
     drawing = null; drawMarks();
   });
@@ -297,6 +369,8 @@ function initMarks() {
     });
   });
   $('markClear').addEventListener('click', () => { marks = []; drawing = null; drawMarks(); });
+  $('zoomAll').addEventListener('click', () => { zoomRect = null; compose(); });
+  cv.addEventListener('dblclick', () => { if (zoomRect) { zoomRect = null; compose(); } });
   $('imgB').addEventListener('load', markCanvasFit);
   addEventListener('resize', markCanvasFit);
 }
@@ -355,7 +429,7 @@ async function loadStrip() {
 }
 async function open(name) {
   if (busy) return; setBusy(true);
-  try { show(await api('/api/open', {name})); $('chat').innerHTML = ''; addMsg('sys', name + ' 열림'); current = name; }
+  try { zoomRect = null; marks = []; show(await api('/api/open', {name})); $('chat').innerHTML = ''; addMsg('sys', name + ' 열림'); current = name; }
   catch (e) { addMsg('sys', '오류: ' + e.message); }
   setBusy(false);
 }
