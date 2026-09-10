@@ -1344,6 +1344,28 @@ class Session:
         self.base = (self.base * (1 - m) + up * m).round().astype(np.uint8)
         return float(hole_full.mean())
 
+    def edit_add_tassel(self, variant='blur', dx=0.0, dy=0.0, length_scale=1.0,
+                        side='right', dx_cm=0.0):
+        """학사모에 술을 얹는다. 규칙은 GUIDELINE.md 참고 —
+        모자 판 오른쪽 모서리에 걸고, 아래 끝이 입선에 오게 길이를 잡는다.
+        길이가 '모자 윗면~입선'이므로 머리 큰 아이는 길어지고 작은 아이는 짧아진다."""
+        import tassel as T
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        hat, st = self._hat_mask()
+        try:
+            ang = self.hat_angle()
+        except ValueError:
+            ang = 0.0
+        mouth_y = float(pts[self.MOUTH_ALL][:, 1].mean()) if hasattr(self, 'MOUTH_ALL')             else float(pts[13:15, 1].mean())
+        self.snapshot('술 합성')
+        box, used, length = T.place(self.base, st, ang, mouth_y,
+                                    variant=variant, dx=dx, dy=dy, dx_cm=dx_cm,
+                                    length_scale=length_scale, side=side, hat_mask=hat)
+        self.pts_checked = False
+        return used, length, box
+
     def guide_check(self):
         """구조 가이드(GUIDELINE.md) 항목을 전부 잰다.
 
@@ -1650,6 +1672,12 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'extend_backdrop':
                 frac = self.edit_extend_backdrop(float(inp.get('threshold', 3.0)), regions=inp.get('regions'))
                 return f'배경지 바깥 {frac * 100:.0f}% 를 배경 질감으로 채움', self.render()
+            if name == 'add_tassel':
+                used, length, _ = self.edit_add_tassel(
+                    inp.get('variant', 'blur'), float(inp.get('dx', 0) or 0),
+                    float(inp.get('dy', 0) or 0), float(inp.get('length_scale', 1) or 1),
+                    inp.get('side', 'right'), float(inp.get('dx_cm', 0) or 0))
+                return f'술 합성 ({used}, 길이 {length:.0f}px)', self.render()
             if name == 'guide_check':
                 return self.guide_check(), None
             if name == 'pose_check':
@@ -1741,6 +1769,11 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
     {'name': 'extend_backdrop', 'description': '배경지가 프레임을 다 못 채운 사진(배경지 가장자리·스탠드·바닥·벽이 보임)에서 그 바깥을 배경지 자체의 질감과 명암으로 채워 프레임 끝까지 늘린다. regions 에 채울 곳을 0~1 다각형 목록으로 대략 그려 주면(모서리 삼각형, 좌우 띠, 아래 띠 등 — 넉넉하게, 인물은 자동 제외) 경계는 색으로 다듬는다. regions 없이 부르면 색으로만 보수적으로 찾는데 배경지의 어두운 테두리와 검은 스탠드가 이어진 사진에선 놓치므로, 미리보기를 보고 남은 곳을 regions 로 다시 부를 것.',
      'input_schema': {'type': 'object', 'properties': {'threshold': {'type': 'number'}, 'regions': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}, 'minItems': 3}}}}},
+    {'name': 'add_tassel', 'description': "학사모에 술을 합성한다. 모자 판 오른쪽 모서리에 걸고 아래 끝이 입선에 오도록 길이를 잡으므로, 머리가 큰 아이는 술이 길어지고 작은 아이는 짧아진다. variant: blur(기본, 항상 이것을 쓴다)/sharp — 선명본은 아이 얼굴보다 술이 튀어서 자동화에 못 쓴다. dx·dy 는 모자 폭 대비 미세 조정(예: dx 0.05 = 오른쪽으로 모자폭의 5%), length_scale 은 길이 배율, side 는 right(기본)/left.",
+     'input_schema': {'type': 'object', 'properties': {
+         'variant': {'type': 'string', 'enum': ['blur', 'sharp']},
+         'dx': {'type': 'number'}, 'dy': {'type': 'number'},
+         'length_scale': {'type': 'number'}, 'dx_cm': {'type': 'number', 'description': '10x13 인화 기준 cm 로 좌우 이동'}, 'side': {'type': 'string', 'enum': ['right', 'left']}}}},
     {'name': 'guide_check', 'description': "구조 가이드 전체 점검(수정 아님). 사용자가 정한 기준선 — 세로 중심축 하나에 모자·얼굴·몸통이 모이고, 모자 윗선·고개·어깨선·소매 끝선이 각각 수평 — 에서 얼마나 벗어났는지 잰다. 학사모 사진은 이걸 먼저 부르고, 벗어난 항목만 level_hat·head_tilt·level_shoulders 로 고친다.",
      'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'pose_check', 'description': '학사모 사진 점검: 고개 기울기, 모자 윗선 기울기, 어깨선 기울기를 잰다(수정 아님). 양수 = 오른쪽이 낮음.',
