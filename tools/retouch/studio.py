@@ -486,7 +486,7 @@ class Session:
 
     FACE_SHAPE_PARAMS = ['eye_size', 'eye_height', 'eye_width', 'eye_tilt', 'eye_distance', 'nose_height', 'nose_width',
                          'smile', 'upper_lip', 'lower_lip', 'mouth_width', 'mouth_height',
-                         'forehead', 'chin_height', 'jawline', 'face_width']
+                         'forehead', 'chin_height', 'jawline', 'face_width', 'face_size']
 
     def edit_face_shape(self, eyes='both', **v):
         pts = self.landmarks()
@@ -564,6 +564,15 @@ class Session:
         if v['face_width']:
             shift(self.CHEEK_L, -0.04 * v['face_width'], 0); shift(self.CHEEK_R, 0.04 * v['face_width'], 0)
             shift(self.JAW_L, -0.02 * v['face_width'], 0); shift(self.JAW_R, 0.02 * v['face_width'], 0)
+
+        if v['face_size']:
+            # 얼굴 전체를 가로·세로 같은 비율로 줄이거나 키운다.
+            # 실측(자르지 않은 60쌍): 보정본의 얼굴이 원본 대비 가로 0.994·세로 0.996 로
+            # **같이** 줄어든다. 즉 작업은 '갸름하게'(face_width)가 아니라 균일 축소다.
+            # 100 = 10% 변화. 사람이 하는 양은 보통 5~30 (0.5~3%) 범위였다.
+            k = 1 + 0.10 * v['face_size']
+            centre = pc[C.FACE_OVAL].mean(0)
+            scale_about(range(len(pc)), centre, k, k)
 
         target = pc + d
         anchors = C.anchor_points(pc, side)
@@ -1640,7 +1649,7 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'angle': {'type': 'number'}}}},
     {'name': 'eyes_from', 'description': '같은 사람의 다른 사진(donor, 폴더 안 파일명)에서 눈을 가져와 붙인다. 눈 감은 사진 구제용. 같은 촬영·비슷한 각도의 사진이어야 한다. which: both | left | right.',
      'input_schema': {'type': 'object', 'properties': {'donor': {'type': 'string'}, 'which': {'type': 'string', 'enum': ['both', 'left', 'right']}}, 'required': ['donor']}},
-    {'name': 'face_shape', 'description': '포토샵 얼굴 인식 리퀴파이. 값은 -100~100, 0=그대로. 눈: eye_size · eye_height · eye_width · eye_tilt(+ 눈꼬리 올림) · eye_distance(+ 멀어짐), eyes=both|left|right(left=사진 왼쪽 눈). 코: nose_height(+ 위로) · nose_width. 입: smile · upper_lip(+ 두껍게) · lower_lip · mouth_width · mouth_height. 얼굴형: forehead(+ 이마 높게) · chin_height(+ 턱 길게) · jawline(+ 턱선 넓게, - 갸름) · face_width(+ 넓게, - 갸름). 20~40 정도가 자연스럽고 60 넘으면 티가 난다.',
+    {'name': 'face_shape', 'description': '포토샵 얼굴 인식 리퀴파이. 값은 -100~100, 0=그대로. 눈: eye_size · eye_height · eye_width · eye_tilt(+ 눈꼬리 올림) · eye_distance(+ 멀어짐), eyes=both|left|right(left=사진 왼쪽 눈). 코: nose_height(+ 위로) · nose_width. 입: smile · upper_lip(+ 두껍게) · lower_lip · mouth_width · mouth_height. 얼굴형: forehead(+ 이마 높게) · chin_height(+ 턱 길게) · jawline(+ 턱선 넓게, - 갸름) · face_width(+ 넓게, - 갸름) · face_size(얼굴 전체를 균일하게 키우거나 줄임, 100=10%. 실측상 이 작업자는 대개 -5~-30 을 쓴다). 20~40 정도가 자연스럽고 60 넘으면 티가 난다.',
      'input_schema': {'type': 'object', 'properties': {**{k: {'type': 'number', 'minimum': -100, 'maximum': 100} for k in Session.FACE_SHAPE_PARAMS}, 'eyes': {'type': 'string', 'enum': ['both', 'left', 'right']}}}},
     {'name': 'expression', 'description': '표정을 워핑으로 바꾼다(픽셀을 새로 만들지 않음). smile -1~1: 입꼬리·볼을 올려 살짝 미소(0.3 은은, 0.6 분명, 1 최대 — 그 이상은 부자연). relax_brow 0~1: 찌푸린 눈썹 사이를 벌리고 올려 인상을 푼다. 입을 벌리거나 이를 보이게는 못 한다.',
      'input_schema': {'type': 'object', 'properties': {'smile': {'type': 'number', 'minimum': -1, 'maximum': 1}, 'relax_brow': {'type': 'number', 'minimum': 0, 'maximum': 1}}}},
