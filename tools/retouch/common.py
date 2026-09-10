@@ -298,7 +298,14 @@ def anchor_points(pts, side, ring=ANCHOR_RING):
 
 
 def _triangulate_np(pts, side):
-    sub = cv2.Subdiv2D((0, 0, side + 1, side + 1))
+    # Subdiv2D 는 사각형 밖의 점을 받으면 예외를 던진다(-211 out of range).
+    # 얼굴이 사진 가장자리에 걸리면 크롭 밖으로 나가는 랜드마크가 생기므로,
+    # 사각형을 점들이 다 들어갈 만큼 넓혀서 잡는다. 삼각형 색인만 쓰고
+    # 좌표는 원래 값을 그대로 쓰므로 넓히는 것 자체는 결과를 바꾸지 않는다.
+    lo = float(min(0.0, pts.min() - 1.0))
+    hi = float(max(side + 1.0, pts.max() + 2.0))
+    sub = cv2.Subdiv2D((int(np.floor(lo)), int(np.floor(lo)),
+                        int(np.ceil(hi - lo)) + 1, int(np.ceil(hi - lo)) + 1))
     for p in pts:
         sub.insert((float(p[0]), float(p[1])))
     tris = sub.getTriangleList().reshape(-1, 3, 2)

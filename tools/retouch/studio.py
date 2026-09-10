@@ -920,6 +920,85 @@ class Session:
         self._cls_key = id(self.base)
         return self._cls
 
+    def backdrop_bottom(self):
+        """배경지의 아랫단 행 번호. 그 아래는 바닥·스탠드라 인화에서 잘라 낸다.
+
+        인물을 뺀 좌우 가장자리 띠에서 배경 색을 배우고, 아래에서 위로 올라오며
+        '이 행의 배경 화소가 배경지 색인가'를 본다. 처음 배경지가 되는 행이 아랫단.
+        """
+        h, w = self.base.shape[:2]
+        pm = self.person_mask(refine=False)
+        bg = pm < 0.3
+        lab = cv2.cvtColor(self.base, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        # 배경지 색: 인물이 없는 위쪽 40% 의 배경 화소로 학습한다 (바닥이 안 섞이는 구간)
+        top = bg[:int(h * 0.4)]
+        ref = lab[:int(h * 0.4)][top]
+        if len(ref) < 500:
+            return h
+        mu = np.median(ref, 0)
+        sd = np.maximum(np.std(ref, 0), 3.0)
+
+        band = int(w * 0.12)                      # 좌우 가장자리 띠에서만 판정
+        side = np.zeros((h, w), bool)
+        side[:, :band] = True
+        side[:, -band:] = True
+        ok = (np.abs(lab - mu) < 3.0 * sd).all(-1) & bg & side
+        cnt = ok.sum(1)
+        need = max(10, int(side[0].sum() * 0.25))
+
+        # 위에서 아래로 내려오며 배경지가 **끊기는** 첫 행을 찾는다.
+        # 아래에서 위로 올라오며 '배경지인 첫 행'을 찾으면, 바닥이 배경지 가장자리처럼
+        # 어두울 때 맨 아랫행에서 바로 걸려 아무것도 못 자른다(실제로 그랬다).
+        run = 0
+        for y in range(int(h * 0.4), h):
+            if cnt[y] >= need:
+                run = 0
+            else:
+                run += 1
+                if run >= max(8, int(h * 0.004)):   # 잡음 한 줄에 속지 않게
+                    return y - run + 1
+        return h
+
+    def edit_crop_print(self, ratio_w=10.0, ratio_h=13.0, head_room=None):
+        """인화 규격으로 자른다 (기본 10:13).
+
+        규칙은 사용자가 정한 것: 위는 '학사모부터 머리까지' 만큼 여백을 남기고,
+        아래는 배경지 끝에서 자른다. 폭은 그 높이에서 비율로 정하고 인물 중심에 맞춘다.
+        """
+        h, w = self.base.shape[:2]
+        hat, (hx, hy, hw, hh, _) = self._hat_mask()
+        room = int(hh if head_room is None else head_room * hh)
+        y0 = max(0, hy - room)
+        y1 = min(h, self.backdrop_bottom())
+        if y1 - y0 < 32:
+            raise ValueError('자를 높이가 너무 작습니다')
+
+        # 폭은 비율에서 나오고, 가로 중심은 인물(모자+어깨)의 중심에 맞춘다
+        new_w = (y1 - y0) * ratio_w / ratio_h
+        try:
+            pl, pr = self.shoulder_points()
+            cx = (pl[0] + pr[0]) / 2
+        except Exception:
+            cx = hx + hw / 2
+        x0 = cx - new_w / 2
+        if new_w > w:                              # 폭이 모자라면 높이를 줄여 맞춘다
+            new_w = w
+            new_h = new_w * ratio_h / ratio_w
+            y0 = max(0, min(y0, y1 - int(new_h)))
+            y1 = min(h, y0 + int(new_h))
+            x0 = 0
+        x0 = int(round(max(0, min(w - new_w, x0))))
+        x1 = int(round(x0 + new_w))
+        self.snapshot('인화 크롭')
+        self.base = self.base[int(y0):int(y1), x0:x1].copy()
+        self.orig = self.orig[int(y0):int(y1), x0:x1].copy()
+        if self.alpha is not None:
+            self.alpha = self.alpha[int(y0):int(y1), x0:x1].copy()
+        self.pts = None
+        self.pts_checked = False
+        return (x0, int(y0), x1, int(y1)), room, int(y1)
+
     def _hat_mask(self):
         """The mortarboard and cap: the segmenter's 'others' class above the
         brows; falls back to a dark region there. Must be clearly wider than
@@ -1416,6 +1495,12 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'face_models':
                 self.edit_face_models(float(inp.get('geom_strength', 1.0)), float(inp.get('tex_strength', 1.0)))
                 return '얼굴 모델 적용', self.render()
+            if name == 'crop_print':
+                box, room, bot = self.edit_crop_print(
+                    float(inp.get('ratio_w', 10)), float(inp.get('ratio_h', 13)),
+                    inp.get('head_room'))
+                return (f'인화 크롭 {self.base.shape[1]}×{self.base.shape[0]}px '
+                        f'(머리 위 여백 {room}px, 배경지 아랫단 y={bot})'), self.render()
             if name == 'crop':
                 self.edit_crop(float(inp['x0']), float(inp['y0']), float(inp['x1']), float(inp['y1']))
                 return f'크롭: {self.base.shape[1]}×{self.base.shape[0]}px', self.render()
@@ -1505,6 +1590,8 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {'amount': {'type': 'number', 'minimum': 0, 'maximum': 1}}, 'required': ['amount']}},
     {'name': 'face_models', 'description': '사용자의 보정 쌍으로 학습된 얼굴형(geom)·질감(tex) 모델을 적용한다. 강도 0~1.5, 1이 학습된 그대로.',
      'input_schema': {'type': 'object', 'properties': {'geom_strength': {'type': 'number'}, 'tex_strength': {'type': 'number'}}}},
+    {'name': 'crop_print', 'description': "인화 규격으로 자른다(기본 10:13). 위는 '학사모부터 머리까지' 높이만큼 여백을 남기고, 아래는 배경지 끝단에서 자르며, 폭은 비율에 맞춰 인물 중심으로 잡는다. 학사모·프로필 인화 전 기본 크롭.",
+     'input_schema': {'type': 'object', 'properties': {'ratio_w': {'type': 'number', 'default': 10}, 'ratio_h': {'type': 'number', 'default': 13}, 'head_room': {'type': 'number', 'description': '머리 위 여백을 모자 높이의 몇 배로 할지. 기본 1.0'}}}},
     {'name': 'crop', 'description': '0~1 비율 상자로 자른다.',
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
     {'name': 'extend_backdrop', 'description': '배경지가 프레임을 다 못 채운 사진(배경지 가장자리·스탠드·바닥·벽이 보임)에서 그 바깥을 배경지 자체의 질감과 명암으로 채워 프레임 끝까지 늘린다. regions 에 채울 곳을 0~1 다각형 목록으로 대략 그려 주면(모서리 삼각형, 좌우 띠, 아래 띠 등 — 넉넉하게, 인물은 자동 제외) 경계는 색으로 다듬는다. regions 없이 부르면 색으로만 보수적으로 찾는데 배경지의 어두운 테두리와 검은 스탠드가 이어진 사진에선 놓치므로, 미리보기를 보고 남은 곳을 regions 로 다시 부를 것.',
