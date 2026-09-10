@@ -112,14 +112,31 @@ def check_cameras(pairs):
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.expanduser('~'), 'OneDrive', '바탕 화면', '보정견본')
-    before_dir = os.path.join(root, '1_원본')
-    after_dir = os.path.join(root, '2_보정본')
     work = os.path.join(root, '_학습결과')
-
     print('견본 폴더 : %s' % root)
-    b, a = stems(before_dir), stems(after_dir)
-    print('  1_원본   : %d장' % len(b))
-    print('  2_보정본 : %d장' % len(a))
+
+    # 두 가지 배치를 다 받는다. 형님이 편한 대로 넣으시면 된다.
+    #   (가) 1_원본\... + 2_보정본\...          ← 아이들 견본
+    #   (나) <교사|단체 등>\원본 + \보정본       ← 종류별로 묶어 넣을 때
+    sets = []
+    if os.path.isdir(os.path.join(root, '1_원본')):
+        sets.append(('아이', os.path.join(root, '1_원본'), os.path.join(root, '2_보정본')))
+    for name in sorted(os.listdir(root)):
+        d = os.path.join(root, name)
+        if not os.path.isdir(d) or name.startswith(('1_', '2_', '_')):
+            continue
+        bd, ad = os.path.join(d, '원본'), os.path.join(d, '보정본')
+        if os.path.isdir(bd) and os.path.isdir(ad):
+            sets.append((name, bd, ad))
+
+    b, a = {}, {}
+    for label, bd, ad in sets:
+        bb, aa = stems(bd), stems(ad)
+        print('  %-10s 원본 %4d장 / 보정본 %4d장' % (label, len(bb), len(aa)))
+        for k, v in bb.items():
+            b.setdefault(label + '/' + k, v)
+        for k, v in aa.items():
+            a.setdefault(label + '/' + k, v)
 
     if not b or not a:
         print('\n두 폴더에 사진을 넣고 다시 실행하세요.')
