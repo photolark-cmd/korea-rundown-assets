@@ -81,6 +81,9 @@ def main():
     ap.add_argument('--face-size', type=int, default=1024, help='크롭 안에서 얼굴 폭(px). 기본 1024')
     ap.add_argument('--preset', help='먼저 적용할 색 프리셋 id (tools/photo-fix/presets.js)')
     ap.add_argument('--presets-js', help='presets.js 경로 (기본: tools/photo-fix/presets.js)')
+    ap.add_argument('--no-color', action='store_true',
+                    help='보정본의 전체 색·밝기 차이를 원본에 맞춰 없앤 뒤 학습 자료를 만든다. '
+                         '질감 모델이 색 보정을 배우지 않게 한다 (색은 따로 다룸)')
     args = ap.parse_args()
 
     pairs = collect_pairs(args.pairs)
@@ -124,6 +127,25 @@ def main():
         aligned = C.warp_points(crop_a, np.vstack([pa, anchors]), np.vstack([pb, anchors]), side)
 
         skin, gate = C.face_masks(pb, side, args.face_size)
+
+        if args.no_color:
+            # 보정본의 '전체 색·밝기 이동'만 걷어내고 국소 편집(잡티·피부결)만 남긴다.
+            # 안 걷어내면 질감 모델이 사실상 밝기/색 모델이 된다.
+            # 얼굴 안 화소로 채널별 1차식(gain·offset)을 맞춰 보정본을 원본 톤으로 되돌린다.
+            m = gate > 0.5
+            if m.sum() > 500:
+                a32 = aligned.astype(np.float32)
+                b32 = crop_b.astype(np.float32)
+                for c in range(3):
+                    x, y = a32[..., c][m], b32[..., c][m]
+                    vx = float(x.var())
+                    if vx < 1e-3:
+                        continue
+                    g = float(((x - x.mean()) * (y - y.mean())).mean() / vx)
+                    g = min(max(g, 0.5), 2.0)                 # 극단값 방지
+                    o = float(y.mean() - g * x.mean())
+                    a32[..., c] = a32[..., c] * g + o
+                aligned = np.clip(a32, 0, 255).astype(np.uint8)
         _, face_w, _ = C.face_frame(lm_b)
         disp_px = np.linalg.norm(pa - pb, axis=1)
         tex_change = float(np.abs(aligned.astype(np.float32) - crop_b.astype(np.float32)).mean(-1)[gate > 0.5].mean())
@@ -131,10 +153,13 @@ def main():
 
         d = os.path.join(args.out, safe_key(key))
         os.makedirs(d, exist_ok=True)
-        cv2.imwrite(os.path.join(d, 'before.png'), crop_b)
-        cv2.imwrite(os.path.join(d, 'after.png'), aligned)
-        cv2.imwrite(os.path.join(d, 'skin.png'), (skin * 255).astype(np.uint8))
-        cv2.imwrite(os.path.join(d, 'gate.png'), (gate * 255).astype(np.uint8))
+        # cv2.imwrite 는 경로에 한글이 있으면 **예외 없이 False 만 돌려주고** 아무것도 안 쓴다.
+        # 반환값을 안 보면 "319쌍 준비 완료"라고 보고하면서 파일은 한 장도 없는 상태가 된다
+        # (실제로 그렇게 됐다). C.imwrite 는 imencode + tofile 이라 한글 경로에서도 쓴다.
+        C.imwrite(os.path.join(d, 'before.png'), crop_b)
+        C.imwrite(os.path.join(d, 'after.png'), aligned)
+        C.imwrite(os.path.join(d, 'skin.png'), (skin * 255).astype(np.uint8))
+        C.imwrite(os.path.join(d, 'gate.png'), (gate * 255).astype(np.uint8))
 
         records.append({
             'key': safe_key(key),

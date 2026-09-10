@@ -29,6 +29,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from unet import UNet, retouch  # noqa: E402
 
 
+def _read(path, flags=cv2.IMREAD_COLOR):
+    """cv2.imread 는 윈도에서 한글 경로를 못 연다(조용히 None). 학습 폴더 이름에
+    아이 이름·유치원 이름이 들어가므로 전부 여기로 읽는다."""
+    img = cv2.imdecode(np.fromfile(path, np.uint8), flags)
+    if img is None:
+        raise FileNotFoundError('학습 자료를 읽지 못했습니다: %s' % path)
+    return img
+
+
 class Pairs(Dataset):
     def __init__(self, root, keys, patch, samples_per_image, train):
         self.root, self.keys, self.patch, self.spi, self.train = root, keys, patch, samples_per_image, train
@@ -38,10 +47,10 @@ class Pairs(Dataset):
 
     def __getitem__(self, i):
         d = os.path.join(self.root, self.keys[i // self.spi])
-        before = cv2.imread(os.path.join(d, 'before.png'))
-        after = cv2.imread(os.path.join(d, 'after.png'))
-        skin = cv2.imread(os.path.join(d, 'skin.png'), cv2.IMREAD_GRAYSCALE)
-        gate = cv2.imread(os.path.join(d, 'gate.png'), cv2.IMREAD_GRAYSCALE)
+        before = _read(os.path.join(d, 'before.png'))
+        after = _read(os.path.join(d, 'after.png'))
+        skin = _read(os.path.join(d, 'skin.png'), cv2.IMREAD_GRAYSCALE)
+        gate = _read(os.path.join(d, 'gate.png'), cv2.IMREAD_GRAYSCALE)
         side = before.shape[0]
         p = min(self.patch, side)
         if self.train:
@@ -96,7 +105,11 @@ def save_preview(path, b, pred, a):
 
 
 def main():
-    C.console_utf8()
+    for _st in (sys.stdout, sys.stderr):      # 윈도 콘솔 cp949 에서 '—' 한 글자에 죽는다
+        try:
+            _st.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('data')
     ap.add_argument('--epochs', type=int, default=40)

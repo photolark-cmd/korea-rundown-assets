@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import sys
 
 import numpy as np
 
@@ -45,7 +46,11 @@ def cv_rms(X, Y, alpha, folds=5, seed=0):
 
 
 def main():
-    C.console_utf8()
+    for _st in (sys.stdout, sys.stderr):      # 윈도 콘솔 cp949 에서 '—' 한 글자에 죽는다
+        try:
+            _st.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('data')
     ap.add_argument('--out')
