@@ -59,6 +59,56 @@ def real_size(path):
         return None
 
 
+
+def body_serial(path):
+    """카메라 바디 시리얼. 촬영자를 가리는 유일한 단서다 —
+    같은 기종을 여러 사람이 쓰므로 기종만으로는 못 가린다."""
+    from PIL import Image, ExifTags
+    tag = {v: k for k, v in ExifTags.TAGS.items()}.get('BodySerialNumber')
+    try:
+        with Image.open(path) as im:
+            ex = im.getexif()
+            v = ex.get(tag)
+            if v is None and hasattr(ex, 'get_ifd'):
+                v = ex.get_ifd(0x8769).get(tag)
+            if isinstance(v, bytes):
+                v = v.decode('utf-8', 'replace')
+            return str(v).strip() if v else ''
+    except Exception:
+        return ''
+
+
+def check_cameras(pairs):
+    """견본이 한 사람 촬영인지 확인하고, 아니면 크게 알린다.
+
+    학습은 '누가 어떻게 보정했는가'를 배운다. 촬영자가 섞이면 보정자도 섞이기 쉽다.
+    실제로 자동 선별한 519쌍 중 501쌍이 남의 촬영이었고, 그 사실을 모른 채
+    학습을 돌릴 뻔했다. 기종만으로는 못 가린다 — 같은 기종을 여러 사람이 쓴다.
+    """
+    from collections import Counter
+    cfg_path = os.path.join(HERE, 'work', 'camera.json')
+    known = ''
+    if os.path.exists(cfg_path):
+        try:
+            known = json.load(open(cfg_path, encoding='utf-8')).get('body_serial', '')
+        except Exception:
+            known = ''
+    c = Counter(body_serial(q['before']) or '(EXIF 없음)' for q in pairs)
+    print()
+    print('촬영 카메라')
+    for k, n in c.most_common():
+        mark = '  <= 등록된 본인 카메라' if known and k == known else ''
+        print('   %-24s %3d장%s' % (k, n, mark))
+    if known and c.get(known, 0) < len(pairs):
+        bad = len(pairs) - c.get(known, 0)
+        print()
+        print('   [주의] 등록된 카메라가 아닌 사진이 %d장 섞여 있습니다.' % bad)
+        print('          다른 사람이 찍은 것이면 보정 성향도 다를 수 있습니다.')
+    elif not known:
+        print('   (work/camera.json 에 본인 카메라를 등록해 두면 섞임을 자동으로 알립니다)')
+    return c
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.expanduser('~'), 'OneDrive', '바탕 화면', '보정견본')
@@ -102,6 +152,8 @@ def main():
         print('\n짝이 %d쌍뿐입니다. 최소 20쌍은 있어야 학습이 의미 있습니다.' % len(pairs))
         if not pairs:
             return 1
+
+    check_cameras(pairs)
 
     os.makedirs(work, exist_ok=True)
     manifest = os.path.join(work, 'pairs.json')
