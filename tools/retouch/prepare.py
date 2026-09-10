@@ -102,25 +102,39 @@ def main():
             before, after = C.imread(bpath), C.imread(apath)
         except ValueError as e:
             skipped.append((key, str(e))); continue
-        if before.shape != after.shape:
-            skipped.append((key, f'크기가 다름 {before.shape[1]}x{before.shape[0]} vs {after.shape[1]}x{after.shape[0]} — 크롭/리사이즈된 쌍'))
-            continue
         if lut is not None:
             before = C.apply_lut(before, lut)
 
         # 보정본은 원본이 찾은 자리에서 다시 찾는다. 각자 독립으로 찾으면 창 스캔이
         # 서로 다른 창에 걸려 두 좌표계가 어긋나고, 변형량이 실제의 수십 배로 나온다.
+        # 다만 잘린 보정본은 좌표계 자체가 달라 물려줄 수 없으므로 따로 찾는다.
         lm_b = lm.detect(before)
-        lm_a = lm.detect_near(after, lm_b) if lm_b is not None else None
+        same_frame = before.shape[:2] == after.shape[:2]
+        if lm_b is None:
+            lm_a = None
+        elif same_frame:
+            lm_a = lm.detect_near(after, lm_b)
+        else:
+            lm_a = lm.detect(after)
         if lm_b is None or lm_a is None:
             skipped.append((key, '얼굴을 찾지 못함' + ('' if lm_b is not None else ' (원본)') + ('' if lm_a is not None else ' (보정본)')))
             continue
 
-        # same crop frame for both, taken from the original's landmarks
+        # 크롭 프레임: 원본은 제 랜드마크로, 보정본도 **제 랜드마크로** 잡는다.
+        # 두 사진이 같은 화소일 때만 한 M 을 공유할 수 있는데, 몇 해치 작업물은
+        # 인화 규격으로 잘려 있어 좌표계가 다르다. 각자 얼굴 기준으로 정규화하면
+        # 자르기·확대축소는 저절로 상쇄되고, 우리는 어차피 크롭을 배우지 않는다.
         M, side = C.crop_transform(lm_b, args.face_size)
         crop_b = cv2.warpAffine(before, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
-        crop_a = cv2.warpAffine(after, M, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
-        pb, pa = C.apply_affine(M, lm_b), C.apply_affine(M, lm_a)
+        if same_frame:
+            Ma = M
+        else:
+            Ma, side_a = C.crop_transform(lm_a, args.face_size)
+            if side_a != side:                       # 얼굴 폭을 맞췄으므로 보통 같다
+                skipped.append((key, '크롭 프레임 크기가 달라 정렬 불가 (%d vs %d)' % (side_a, side)))
+                continue
+        crop_a = cv2.warpAffine(after, Ma, (side, side), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        pb, pa = C.apply_affine(M, lm_b), C.apply_affine(Ma, lm_a)
 
         # undo the liquify: move the retouched pixels back onto the original's mesh
         anchors = C.anchor_points(pb, side)
@@ -147,6 +161,13 @@ def main():
                     a32[..., c] = a32[..., c] * g + o
                 aligned = np.clip(a32, 0, 255).astype(np.uint8)
         _, face_w, _ = C.face_frame(lm_b)
+        _, face_w_a, _ = C.face_frame(lm_a)
+        if face_w_a < 0.85 * face_w:
+            # 보정본이 원본보다 얼굴 해상도가 낮으면(크롭 후 축소 저장) 그 쌍은
+            # '흐리게 만들라'를 가르친다. 질감 모델에는 독이다.
+            skipped.append((key, '보정본 얼굴 해상도가 낮음 (%dpx vs 원본 %dpx) — 축소 저장본'
+                            % (int(face_w_a), int(face_w))))
+            continue
         disp_px = np.linalg.norm(pa - pb, axis=1)
         tex_change = float(np.abs(aligned.astype(np.float32) - crop_b.astype(np.float32)).mean(-1)[gate > 0.5].mean())
         raw_change = float(np.abs(crop_a.astype(np.float32) - crop_b.astype(np.float32)).mean(-1)[gate > 0.5].mean())
