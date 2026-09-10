@@ -83,6 +83,8 @@ class Session:
         self._retoucher = None
         self._client = None
         self._thumbs = {}
+        self._face_base = None      # 얼굴 게이지 기준 이미지
+        self.face_gauge = {}
         self.picked = None      # 사용자가 직접 고른 사진들 (폴더 목록보다 우선)
         self._thumb_lock = threading.Lock()
         self.messages = []
@@ -98,6 +100,8 @@ class Session:
         self.pts = None
         self.pts_checked = False
         self.alpha = None
+        self._face_base = None
+        self.face_gauge = {}
 
     def set_folder(self, path):
         if not os.path.isdir(path):
@@ -243,11 +247,12 @@ class Session:
 
     def state(self):
         if self.base is None:
-            return {'open': False}
+            return {'face_gauge': dict(self.face_gauge), 'open': False}
         changed = {k: v for k, v in self.params.items() if v != color.DEFAULTS[k]}
         return {'open': True, 'name': self.name, 'width': int(self.base.shape[1]), 'height': int(self.base.shape[0]),
                 'params': self.params, 'changed': changed, 'auto': self.auto, 'preset': self.preset,
                 'undo': [u[4] for u in self.undo_stack], 'face': (None if not self.pts_checked else self.pts is not None),
+                'face_gauge': dict(self.face_gauge),
                 'models': os.path.exists(os.path.join(self.args.data, 'tex.pt')) or os.path.exists(os.path.join(self.args.data, 'geom.npz'))}
 
     def state_text(self):
@@ -488,7 +493,30 @@ class Session:
                          'smile', 'upper_lip', 'lower_lip', 'mouth_width', 'mouth_height',
                          'forehead', 'chin_height', 'jawline', 'face_width', 'face_size']
 
-    def edit_face_shape(self, eyes='both', **v):
+    def set_face_gauge(self, eyes='both', **v):
+        """게이지(슬라이더)용 얼굴 변형. 값을 바꿀 때마다 **처음 상태에서 다시** 만든다.
+
+        edit_face_shape 는 현재 이미지를 워핑해 덮어쓰므로 슬라이더를 움직일 때마다
+        변형이 누적된다(1%씩 열 번 = 10%). 게이지는 누적되면 안 되므로,
+        얼굴 조정을 시작한 시점의 이미지를 따로 들고 있다가 매번 그것을 워핑한다."""
+        v = {k: float(v.get(k, 0) or 0) for k in self.FACE_SHAPE_PARAMS}
+        if self._face_base is None:
+            self._face_base = self.base.copy()
+            self.snapshot('얼굴 조정')
+        self.base = self._face_base.copy()
+        self.pts = None
+        self.pts_checked = False
+        self.face_gauge = dict(v, eyes=eyes)
+        if any(v.values()):
+            self.edit_face_shape(eyes=eyes, _gauge=True, **v)
+        return self.face_gauge
+
+    def clear_face_gauge(self):
+        """다른 편집이 들어오면 게이지 기준점을 버린다 — 안 버리면 그 편집이 되돌려진다."""
+        self._face_base = None
+        self.face_gauge = {}
+
+    def edit_face_shape(self, eyes='both', _gauge=False, **v):
         pts = self.landmarks()
         if pts is None:
             raise ValueError('얼굴을 찾지 못했습니다')
@@ -578,7 +606,8 @@ class Session:
         anchors = C.anchor_points(pc, side)
         warped = C.warp_points(crop, np.vstack([pc, anchors]), np.vstack([target, anchors]), side)
         label = ' '.join(f'{k}{int(round(x * 100)):+d}' for k, x in v.items() if x)
-        self.snapshot('얼굴 ' + label[:24])
+        if not _gauge:
+            self.snapshot('얼굴 ' + label[:24])
         self.base = paste_back(self.base, warped, M, paste_mask(pc, side, face_size))
         self.pts_checked = False
         return label
@@ -1488,6 +1517,11 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
 
     def run_tool(self, name, inp):
         with self.lock:
+            # 얼굴 게이지는 '조정 시작 시점의 이미지'를 기준으로 매번 다시 만든다.
+            # 그 사이에 다른 편집이 들어오면 기준점을 버려야 한다 — 안 그러면
+            # 다음 게이지 조작이 그 편집을 되돌려 버린다.
+            if name not in ('zoom', 'pose_check', 'guide_check', 'face_shape'):
+                self.clear_face_gauge()
             if name == 'adjust':
                 self.snapshot('색 조정')
                 if inp.get('reset'):
@@ -1765,8 +1799,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._previews())
             if s.base is None:
                 return self._json({'error': '열린 사진이 없습니다'}, 400)
+            if self.path == '/api/face':
+                with s.lock:
+                    g = s.set_face_gauge(eyes=body.get('eyes', 'both'), **(body.get('params') or {}))
+                return self._json({'face': g, **self._previews()})
             if self.path == '/api/params':
                 with s.lock:
+                    s.clear_face_gauge()
                     s.snapshot('색 조정')
                     s.params = color.clamp_params({**s.params, **body.get('params', {})})
                     if 'auto' in body:
@@ -1776,6 +1815,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._previews())
             if self.path == '/api/undo':
                 with s.lock:
+                    s.clear_face_gauge()
                     s.undo()
                 return self._json(self._previews())
             if self.path == '/api/save':

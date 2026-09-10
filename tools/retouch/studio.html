@@ -37,6 +37,10 @@
   details { border-top:1px solid var(--line); padding:8px 12px; max-height:45%; overflow-y:auto; }
   summary { cursor:pointer; color:var(--muted); font-size:12px; font-weight:600; }
   .ctl { margin:8px 0; }
+  .facehead { display:flex; gap:6px; align-items:center; margin:6px 0 10px; }
+  .facehead select, .facehead button { font-size:12px; padding:4px 8px; }
+  .fgroup { margin:10px 0 4px; font-size:11px; color:var(--accent); font-weight:600;
+            border-top:1px solid var(--line); padding-top:8px; }
   .ctl .row { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); }
   .ctl .row b { color:var(--text); font-weight:500; font-variant-numeric:tabular-nums; }
   input[type=range] { width:100%; accent-color:var(--accent); margin:2px 0 0; }
@@ -81,7 +85,18 @@
       <textarea id="text" placeholder="지시를 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
       <button id="send" class="primary">보내기</button>
     </div>
-    <details><summary>슬라이더로 직접 조정</summary><div id="panel"></div></details>
+    <details><summary>슬라이더로 직접 조정 (색)</summary><div id="panel"></div></details>
+    <details id="faceBox"><summary>얼굴 부위별 조정</summary>
+      <div class="facehead">
+        <select id="eyesSel">
+          <option value="both">양쪽 눈</option>
+          <option value="left">왼쪽 눈만</option>
+          <option value="right">오른쪽 눈만</option>
+        </select>
+        <button id="faceReset">전부 0으로</button>
+      </div>
+      <div id="facePanel"></div>
+    </details>
   </aside>
 </main>
 <div class="strip" id="strip"></div>
@@ -110,6 +125,9 @@ function show(j) {
   $('status').textContent = state.open ? `${state.name} · ${state.width}×${state.height}` + (state.auto ? ' · 자동 보정' : '') + (state.undo.length ? ` · 되돌리기 ${state.undo.length}` : '') : '사진을 열거나 아래 필름스트립에서 고르세요';
   if (state.open) { for (const [k] of SLIDERS) { $('r-'+k).value = state.params[k]; $('v-'+k).textContent = fmt(k, state.params[k]); } $('preset').value = state.preset || ''; }
   document.querySelectorAll('#strip img').forEach(im => im.classList.toggle('on', im.dataset.name === state.name));
+  // 서버가 게이지 기준점을 버렸으면(다른 편집이 들어왔거나 사진을 새로 열었으면)
+  // 화면의 슬라이더도 같이 0 으로 돌린다 — 안 그러면 숫자와 사진이 어긋난다.
+  if (state.face_gauge && !Object.keys(state.face_gauge).length && Object.values(faceVals).some(x => x)) resetFaceUI();
 }
 function fmt(k, v) { v = Number(v); return k === 'exposure' ? (v > 0 ? '+' : '') + v.toFixed(2) : k === 'contrast' ? v.toFixed(2) : (v > 0 ? '+' + v : String(v)); }
 function addMsg(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('chat').appendChild(d); $('chat').scrollTop = 1e9; return d; }
@@ -175,6 +193,57 @@ async function open(name) {
   setBusy(false);
 }
 
+// 얼굴 게이지. 값은 -100~100, 0 = 그대로. 슬라이더를 놓을 때마다 서버가
+// '조정 시작 시점'에서 다시 만들므로 누적되지 않는다.
+const FACE_GROUPS = [
+  ['얼굴형', [
+    ['face_size', '얼굴 전체 크기'], ['face_width', '얼굴 폭'],
+    ['jawline', '턱선'], ['chin_height', '턱 길이'], ['forehead', '이마 높이']]],
+  ['눈', [
+    ['eye_size', '눈 크기'], ['eye_height', '눈 높이'], ['eye_width', '눈 폭'],
+    ['eye_tilt', '눈꼬리'], ['eye_distance', '눈 간격']]],
+  ['코', [['nose_height', '코 높이'], ['nose_width', '코 폭']]],
+  ['입', [
+    ['smile', '미소'], ['upper_lip', '윗입술'], ['lower_lip', '아랫입술'],
+    ['mouth_width', '입 폭'], ['mouth_height', '입 높이']]],
+];
+const faceVals = {};
+
+function buildFacePanel() {
+  const box = $('facePanel');
+  for (const [title, items] of FACE_GROUPS) {
+    const h = document.createElement('div');
+    h.className = 'fgroup'; h.textContent = title; box.appendChild(h);
+    for (const [key, label] of items) {
+      faceVals[key] = 0;
+      const d = document.createElement('div'); d.className = 'ctl';
+      d.innerHTML = '<div class="row"><span>' + label + '</span><b id="fv-' + key + '">0</b></div>';
+      const inp = document.createElement('input');
+      inp.type = 'range'; inp.min = -100; inp.max = 100; inp.step = 1; inp.value = 0;
+      inp.id = 'fr-' + key;
+      inp.addEventListener('input', () => { $('fv-' + key).textContent = inp.value; });
+      inp.addEventListener('change', () => { faceVals[key] = Number(inp.value); sendFace(); });
+      d.appendChild(inp); box.appendChild(d);
+    }
+  }
+}
+
+async function sendFace() {
+  if (!state.open || busy) return;
+  setBusy(true);
+  try { show(await api('/api/face', {eyes: $('eyesSel').value, params: faceVals})); }
+  catch (e) { addMsg('sys', '오류: ' + e.message); }
+  setBusy(false);
+}
+
+function resetFaceUI() {
+  for (const k in faceVals) {
+    faceVals[k] = 0;
+    const r = $('fr-' + k); if (r) r.value = 0;
+    const v = $('fv-' + k); if (v) v.textContent = '0';
+  }
+}
+
 function buildPanel() {
   for (const [k, label, min, max, step] of SLIDERS) {
     const w = document.createElement('div'); w.className = 'ctl';
@@ -186,6 +255,9 @@ function buildPanel() {
   }
 }
 
+buildFacePanel();
+$('faceReset').addEventListener('click', () => { resetFaceUI(); sendFace(); });
+$('eyesSel').addEventListener('change', () => { if (Object.values(faceVals).some(x => x)) sendFace(); });
 $('openFolder').addEventListener('click', () => browse('folder'));
 $('openFiles').addEventListener('click', () => browse('files'));
 $('pick').addEventListener('change', async e => {
