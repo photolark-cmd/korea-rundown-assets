@@ -26,11 +26,19 @@ if not os.path.exists(PY):
 
 
 def stems(folder):
+    """하위 폴더까지 훑는다. 사용자는 촬영(유치원)별로 나눠 넣으므로
+    1_원본\명일유치원\아무개.jpg 처럼 한 겹 더 들어간다.
+    짝은 **상대경로**로 맞춘다 — 파일명만 쓰면 다른 유치원의 동명이인이 섞인다."""
     out = {}
     if not os.path.isdir(folder):
         return out
-    for n in C.list_images(folder):
-        out.setdefault(os.path.splitext(n)[0].strip().lower(), os.path.join(folder, n))
+    for dirpath, _, files in os.walk(folder):
+        for n in files:
+            if os.path.splitext(n)[1].lower() not in C.IMG_EXT:
+                continue
+            p = os.path.join(dirpath, n)
+            rel = os.path.relpath(p, folder)
+            out.setdefault(os.path.splitext(rel)[0].strip().lower(), p)
     return out
 
 
@@ -75,17 +83,19 @@ def main():
         if not bp:
             unmatched.append(os.path.basename(ap))
             continue
+        # 잘린 보정본도 쓴다 — prepare 가 얼굴 기준으로 각각 정렬한다.
+        # 다만 원본보다 화소가 크게 줄어든 것은 '흐리게 만들라'를 가르치므로 여기서 뺀다.
         sb, sa = real_size(bp), real_size(ap)
-        if sb and sa and sb != sa:
-            mismatched.append('%s  %dx%d vs %dx%d' % (os.path.basename(ap), *sb, *sa))
+        if sb and sa and (sa[0] * sa[1]) < 0.72 * (sb[0] * sb[1]):
+            mismatched.append('%s  %dx%d → %dx%d (축소 저장)' % (os.path.basename(ap), *sb, *sa))
             continue
-        pairs.append({'shoot': '견본', 'before': bp, 'after': ap})
+        pairs.append({'shoot': os.path.dirname(k) or '견본', 'before': bp, 'after': ap})
 
     print('\n짝 %d 쌍' % len(pairs))
     if unmatched:
         print('  이름이 안 맞아 뺌 %d장: %s' % (len(unmatched), ', '.join(unmatched[:5])))
     if mismatched:
-        print('  크기가 달라 뺌 %d장 (자른 사진은 못 씁니다):' % len(mismatched))
+        print('  축소 저장이라 뺌 %d장 (원본보다 화소가 크게 줄어든 것):' % len(mismatched))
         for m in mismatched[:5]:
             print('     %s' % m)
     if len(pairs) < 5:

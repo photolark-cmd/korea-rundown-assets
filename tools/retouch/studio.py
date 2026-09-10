@@ -1242,6 +1242,72 @@ class Session:
         self.base = (self.base * (1 - m) + up * m).round().astype(np.uint8)
         return float(hole_full.mean())
 
+    def guide_check(self):
+        """구조 가이드(GUIDELINE.md) 항목을 전부 잰다.
+
+        사용자가 준 빨간 선 그림을 옮긴 것: 세로 중심축 하나에 모자·얼굴·몸통이
+        모이고, 모자 윗선·모자 테·입선·어깨선·소매 끝선이 각각 수평이며,
+        모자 꼭대기에서 소매 끝까지가 이등변삼각형을 이룬다."""
+        pts = self.landmarks()
+        if pts is None:
+            raise ValueError('얼굴을 찾지 못했습니다')
+        h, w = self.base.shape[:2]
+        out = []
+
+        # --- 각도: 고개 · 모자 · 어깨
+        out.append(('고개 기울기', np.degrees(C.face_frame(pts)[2]), '°'))
+        hat_cx = None
+        try:
+            out.append(('모자 윗선', self.hat_angle(), '°'))
+            _, (hx, hy, hw, hh, _) = self._hat_mask()
+            hat_cx = hx + hw / 2
+        except ValueError as e:
+            out.append(('모자', str(e), ''))
+
+        sh = None
+        try:
+            sp = self.shoulder_points()
+            (xl, yl), (xr, yr) = sp['left'], sp['right']
+            sh = ((xl + xr) / 2, yl, yr)
+            out.append(('어깨선', np.degrees(np.arctan2(yr - yl, xr - xl)), '°'))
+        except ValueError as e:
+            out.append(('어깨', str(e), ''))
+
+        # --- 중심축: 얼굴 중앙을 축으로 삼고 모자·어깨 중앙이 얼마나 벗어났나
+        _, fw, _ = C.face_frame(pts)
+        face_cx = float(pts[:, 0].mean())
+        if hat_cx is not None:
+            out.append(('모자 중심 어긋남', 100 * (hat_cx - face_cx) / fw, '% 얼굴폭'))
+        if sh is not None:
+            out.append(('어깨 중심 어긋남', 100 * (sh[0] - face_cx) / fw, '% 얼굴폭'))
+
+        # --- 소매 끝: 인물 실루엣에서 가장 바깥으로 나간 좌우 지점
+        try:
+            pm = self.person_mask(refine=False) > 0.5
+            ys, xs = np.nonzero(pm)
+            if len(xs) > 100:
+                lo, hi = int(xs.min()), int(xs.max())
+                y_lo = float(ys[xs <= lo + max(2, w // 400)].mean())
+                y_hi = float(ys[xs >= hi - max(2, w // 400)].mean())
+                # 소매 끝 높이차는 실측상 보정 전후가 거의 안 변한다(아이가 졸업장을 한 손으로
+                # 더 높이 들기 때문). 기준이 아니라 참고값으로만 둔다.
+                out.append(('(참고) 소매 끝 높이차', 100 * (y_hi - y_lo) / fw, '% 얼굴폭'))
+                out.append(('소매 좌우 폭 비', 100 * (face_cx - lo) / max(1.0, hi - face_cx), '%'))
+        except Exception as e:
+            out.append(('소매', str(e), ''))
+
+        lines = []
+        for name, val, unit in out:
+            if isinstance(val, str):
+                lines.append('%s: %s' % (name, val))
+            elif unit == '°':
+                lines.append('%s %+.1f°' % (name, val))
+            elif unit == '%':
+                lines.append('%s %.0f%% (100%% 이 대칭)' % (name, val))
+            else:
+                lines.append('%s %+.1f%s' % (name, val, unit))
+        return ' · '.join(lines) + '  (각도 양수 = 오른쪽이 낮음, 어긋남 양수 = 오른쪽으로 치우침)'
+
     def pose_report(self):
         pts = self.landmarks()
         if pts is None:
@@ -1469,6 +1535,8 @@ crop 은 0~1 비율 상자. 블로그 규격(1200×630, 1080×1080, 가로 1600)
             if name == 'extend_backdrop':
                 frac = self.edit_extend_backdrop(float(inp.get('threshold', 3.0)), regions=inp.get('regions'))
                 return f'배경지 바깥 {frac * 100:.0f}% 를 배경 질감으로 채움', self.render()
+            if name == 'guide_check':
+                return self.guide_check(), None
             if name == 'pose_check':
                 return self.pose_report(), None
             if name == 'level_hat':
@@ -1558,6 +1626,8 @@ TOOLS = [
      'input_schema': {'type': 'object', 'properties': {k: {'type': 'number'} for k in ('x0', 'y0', 'x1', 'y1')}, 'required': ['x0', 'y0', 'x1', 'y1']}},
     {'name': 'extend_backdrop', 'description': '배경지가 프레임을 다 못 채운 사진(배경지 가장자리·스탠드·바닥·벽이 보임)에서 그 바깥을 배경지 자체의 질감과 명암으로 채워 프레임 끝까지 늘린다. regions 에 채울 곳을 0~1 다각형 목록으로 대략 그려 주면(모서리 삼각형, 좌우 띠, 아래 띠 등 — 넉넉하게, 인물은 자동 제외) 경계는 색으로 다듬는다. regions 없이 부르면 색으로만 보수적으로 찾는데 배경지의 어두운 테두리와 검은 스탠드가 이어진 사진에선 놓치므로, 미리보기를 보고 남은 곳을 regions 로 다시 부를 것.',
      'input_schema': {'type': 'object', 'properties': {'threshold': {'type': 'number'}, 'regions': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}, 'minItems': 3}}}}},
+    {'name': 'guide_check', 'description': "구조 가이드 전체 점검(수정 아님). 사용자가 정한 기준선 — 세로 중심축 하나에 모자·얼굴·몸통이 모이고, 모자 윗선·고개·어깨선·소매 끝선이 각각 수평 — 에서 얼마나 벗어났는지 잰다. 학사모 사진은 이걸 먼저 부르고, 벗어난 항목만 level_hat·head_tilt·level_shoulders 로 고친다.",
+     'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'pose_check', 'description': '학사모 사진 점검: 고개 기울기, 모자 윗선 기울기, 어깨선 기울기를 잰다(수정 아님). 양수 = 오른쪽이 낮음.',
      'input_schema': {'type': 'object', 'properties': {}}},
     {'name': 'level_hat', 'description': '학사모 판을 돌려 윗선을 수평으로. angle 생략 시 자동 측정값. 판만 움직이고 모자 몸통은 그대로.',
