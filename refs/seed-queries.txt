@@ -1,0 +1,52 @@
+# 사이언스 썰 레퍼런스 수집 시드 — 생물 · 공룡 · 거대 괴물
+#
+#   node tools/collect-refs.mjs --seeds refs/seed-queries.txt --no-shorts --min-subs 1000
+#
+# 한 줄에 하나. #로 시작하면 주석.
+# @핸들 · UC로 시작하는 채널 ID · 채널 URL 은 그 채널 업로드 전체를 훑고,
+# 나머지는 검색어로 씁니다.
+#
+# 검색어 한 줄이 쿼터 300유닛(일반 2페이지 + 최근 30일 1페이지), 하루 무료 한도가
+# 10,000입니다. 아래 16줄이면 4,800유닛 — 하루에 두 번 돌릴 수 있는 양입니다.
+# 줄을 늘릴 때 이 계산을 먼저 하세요.
+# 채널 훑기는 거의 공짜니, 쓸 만한 채널을 찾은 다음부터는 @핸들로 옮기는 게 낫습니다.
+
+# 공룡
+공룡 이야기
+공룡 멸종
+티라노사우루스
+스피노사우루스
+공룡 실제 모습 복원
+
+# 고생물 — 공룡 아닌 것들
+고생대 생물
+고대 상어 메갈로돈
+거대 곤충 고생대
+매머드 복원
+
+# 지금 살아 있는 거대 생물
+심해 생물
+대왕오징어
+지구에서 가장 큰 생물
+괴물 물고기
+
+# 멸종 · 괴물
+멸종 동물
+미확인 생물체
+거대 생물 전설
+
+# 채널 — 웹 검색으로 모은 후보 (2026-08-26). 근거·제외 목록: refs/candidate-channels.md
+# 핸들이 확인되지 않아 못 찾는 줄이 있을 수 있습니다. 그런 줄은 경고만 남고 넘어갑니다.
+# 채널 훑기는 6유닛 남짓이라 검색어 한 줄(300유닛)보다 훨씬 쌉니다.
+
+https://www.youtube.com/@Jabsik_dinosaur
+https://www.youtube.com/channel/UCVKvxjaxcKgFm7BEUw__2gg
+# https://www.youtube.com/channel/UCYEokR7TzrZnrIefPM_nZnw  # 2026-08-27: 업로드 재생목록 404 — 삭제됐거나 잘못된 ID
+https://www.youtube.com/@%EC%9A%B0%EB%A7%88UMA
+https://www.youtube.com/@TV%EC%83%9D%EB%AC%BC%EB%8F%84%EA%B0%90
+https://www.youtube.com/@kodaiseibutuch
+
+# 아래는 일부러 꺼둔 것들 — 구독자가 많아 100배를 구조적으로 못 넘습니다.
+# https://www.youtube.com/@Unrealscience
+# https://www.youtube.com/@kbsanimalkingdom
+# https://www.youtube.com/@SBSANIMAL
